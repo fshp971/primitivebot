@@ -101,7 +101,7 @@ def process_task(task):
         # Core Logic: Read project-specific System Prompt for context isolation
         context_file = os.path.join(work_dir, '.gemini_context.txt')
         final_prompt = task_text
-        
+
         # Check if context file exists and read it
         if os.path.exists(context_file):
             try:
@@ -137,7 +137,7 @@ def process_task(task):
             reply = reply[:4000] + "...\n[Output Truncated]"
 
         bot.send_message(chat_id, reply)
-    
+
     except Exception as e:
         logger.error(f"Worker exception: {e}")
         if bot:

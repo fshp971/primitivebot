@@ -47,7 +47,7 @@ class TestGeminiBot(unittest.TestCase):
                 return True
             return False
         mock_isdir.side_effect = side_effect
-        
+
         dirs = bot.get_project_dirs()
         self.assertEqual(dirs, ['project1', 'project2'])
 
@@ -56,10 +56,10 @@ class TestGeminiBot(unittest.TestCase):
     def test_list_projects_empty(self, mock_exists, mock_listdir):
         mock_exists.return_value = True
         mock_listdir.return_value = [] # Empty directory
-        
+
         message = MagicMock()
         bot.list_projects(message)
-        
+
         # Verify bot reply
         bot.bot.reply_to.assert_called_with(message, "Workspace is empty. Please create project folders in the mounted host directory.")
 
@@ -70,10 +70,10 @@ class TestGeminiBot(unittest.TestCase):
         mock_exists.return_value = True
         mock_listdir.return_value = ['project1']
         mock_isdir.return_value = True
-        
+
         message = MagicMock()
         bot.list_projects(message)
-        
+
         # Verify bot sends message with markup
         bot.bot.send_message.assert_called()
         args, kwargs = bot.bot.send_message.call_args
@@ -84,9 +84,9 @@ class TestGeminiBot(unittest.TestCase):
         call = MagicMock()
         call.data = "proj_project1"
         call.message.chat.id = 123
-        
+
         bot.handle_project_selection(call)
-        
+
         self.assertEqual(bot.user_project_state[123], os.path.join(bot.BASE_DIR, 'project1'))
         bot.bot.answer_callback_query.assert_called_with(call.id, "Switched successfully")
         bot.bot.edit_message_text.assert_called()
@@ -95,9 +95,9 @@ class TestGeminiBot(unittest.TestCase):
         message = MagicMock()
         message.chat.id = 123
         message.text = "Do something"
-        
+
         bot.handle_task(message)
-        
+
         # Check if task is in queue
         self.assertEqual(bot.task_queue.qsize(), 1)
         task = bot.task_queue.get()
@@ -114,12 +114,12 @@ class TestGeminiBot(unittest.TestCase):
             'text': 'Run this',
             'cwd': '/tmp/test_workspace/project1'
         }
-        
+
         mock_exists.return_value = False # No context file
         mock_subprocess.return_value = MagicMock(stdout="Output", stderr="")
-        
+
         bot.process_task(task)
-        
+
         # Verify gemini-cli call
         mock_subprocess.assert_called_with(
             ['gemini-cli', '--prompt', 'Run this'],
@@ -128,7 +128,7 @@ class TestGeminiBot(unittest.TestCase):
             text=True,
             timeout=600
         )
-        
+
         # Verify bot reply
         bot.bot.send_message.assert_called()
         args, kwargs = bot.bot.send_message.call_args_list[-1]
@@ -143,16 +143,16 @@ class TestGeminiBot(unittest.TestCase):
             'text': 'Run this',
             'cwd': '/tmp/test_workspace/project1'
         }
-        
+
         # Mock context file exists
         mock_exists.return_value = True
-        
+
         # Mock file open
         with patch('builtins.open', mock_open(read_data="Context data")) as mock_file:
             mock_subprocess.return_value = MagicMock(stdout="Output", stderr="")
-            
+
             bot.process_task(task)
-            
+
             # Verify prompt contains context
             mock_subprocess.assert_called()
             call_args = mock_subprocess.call_args
@@ -168,9 +168,9 @@ class TestGeminiBot(unittest.TestCase):
         call = MagicMock()
         call.data = "proj_project1"
         call.message.chat.id = 123
-        
+
         bot.handle_project_selection(call)
-        
+
         self.assertEqual(bot.user_project_state[123], os.path.join(bot.BASE_DIR, 'project1'))
         bot.bot.answer_callback_query.assert_called_with(call.id, "Switched successfully")
         bot.bot.edit_message_text.assert_called()
@@ -179,9 +179,9 @@ class TestGeminiBot(unittest.TestCase):
         message = MagicMock()
         message.chat.id = 123
         message.text = "Do something"
-        
+
         bot.handle_task(message)
-        
+
         # Check if task is in queue
         self.assertEqual(bot.task_queue.qsize(), 1)
         task = bot.task_queue.get()
