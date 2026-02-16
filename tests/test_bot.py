@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch, mock_open
 import os
 import sys
 import queue
+import threading
 
 # Set environment variable for testing before importing bot
 os.environ['TELEGRAM_BOT_TOKEN'] = 'TEST_TOKEN'
@@ -31,7 +32,8 @@ class TestGeminiBot(unittest.TestCase):
     def setUp(self):
         # Reset the bot mock and other states
         bot.bot = MagicMock()
-        bot.task_queue = queue.Queue()
+        bot.project_queues = {}
+        bot.active_workers = {}
         bot.user_project_state = {}
         bot.BASE_DIR = '/tmp/test_workspace'
 
@@ -91,19 +93,24 @@ class TestGeminiBot(unittest.TestCase):
         bot.bot.answer_callback_query.assert_called_with(call.id, "Switched successfully")
         bot.bot.edit_message_text.assert_called()
 
-    def test_handle_task(self):
+    @patch('bot.ensure_worker_running')
+    def test_handle_task(self, mock_ensure_worker):
         message = MagicMock()
         message.chat.id = 123
         message.text = "Do something"
 
         bot.handle_task(message)
 
-        # Check if task is in queue
-        self.assertEqual(bot.task_queue.qsize(), 1)
-        task = bot.task_queue.get()
+        # Check if task is in the correct queue
+        q = bot.get_project_queue(bot.BASE_DIR)
+        self.assertEqual(q.qsize(), 1)
+
+        task = q.get()
         self.assertEqual(task['chat_id'], 123)
         self.assertEqual(task['text'], "Do something")
         self.assertEqual(task['cwd'], bot.BASE_DIR) # Default dir
+
+        mock_ensure_worker.assert_called_with(bot.BASE_DIR)
 
     @patch('subprocess.run')
     @patch('os.path.exists') # For context file check
@@ -141,9 +148,9 @@ class TestGeminiBot(unittest.TestCase):
         mock_exists.return_value = False
         message = MagicMock()
         message.text = "/create new_project"
-        
+
         bot.create_project(message)
-        
+
         expected_path = os.path.join(bot.BASE_DIR, 'new_project')
         mock_makedirs.assert_called_with(expected_path)
         bot.bot.reply_to.assert_called()
@@ -156,9 +163,9 @@ class TestGeminiBot(unittest.TestCase):
         mock_exists.return_value = True
         message = MagicMock()
         message.text = "/create existing_project"
-        
+
         bot.create_project(message)
-        
+
         mock_makedirs.assert_not_called()
         bot.bot.reply_to.assert_called()
         args, _ = bot.bot.reply_to.call_args
@@ -167,9 +174,9 @@ class TestGeminiBot(unittest.TestCase):
     def test_create_project_invalid_name(self):
         message = MagicMock()
         message.text = "/create invalid@name"
-        
+
         bot.create_project(message)
-        
+
         bot.bot.reply_to.assert_called()
         args, _ = bot.bot.reply_to.call_args
         self.assertIn("Invalid project name", args[1])
@@ -177,12 +184,39 @@ class TestGeminiBot(unittest.TestCase):
     def test_create_project_no_args(self):
         message = MagicMock()
         message.text = "/create"
-        
+
         bot.create_project(message)
-        
+
         bot.bot.reply_to.assert_called()
         args, _ = bot.bot.reply_to.call_args
         self.assertIn("Usage:", args[1])
+
+    def test_get_project_queue(self):
+        q1 = bot.get_project_queue('p1')
+        q2 = bot.get_project_queue('p1')
+        q3 = bot.get_project_queue('p2')
+
+        self.assertIs(q1, q2)
+        self.assertIsNot(q1, q3)
+        self.assertIn('p1', bot.project_queues)
+        self.assertIn('p2', bot.project_queues)
+
+    @patch('threading.Thread')
+    def test_ensure_worker_running(self, mock_thread):
+        mock_t = MagicMock()
+        mock_thread.return_value = mock_t
+
+        bot.ensure_worker_running('p1')
+
+        mock_thread.assert_called()
+        mock_t.start.assert_called()
+        self.assertIn('p1', bot.active_workers)
+
+        # Second call should not start new thread if active
+        mock_t.is_alive.return_value = True
+        mock_thread.reset_mock()
+        bot.ensure_worker_running('p1')
+        mock_thread.assert_not_called()
 
 if __name__ == '__main__':
     unittest.main()

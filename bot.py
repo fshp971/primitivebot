@@ -28,10 +28,13 @@ except Exception as e:
     logger.error(f"Failed to initialize bot: {e}")
     bot = None
 
-task_queue = queue.Queue()
+# Global state for queues and workers
+project_queues = {}  # Map: project_path -> queue.Queue
+active_workers = {}  # Map: project_path -> threading.Thread
+worker_lock = threading.Lock()
+user_project_state = {}
 
 BASE_DIR = os.environ.get('WORKSPACE_DIR', '/workspace')
-user_project_state = {}
 
 def get_project_dirs():
     """Scans all project folders in the mounted directory."""
@@ -42,6 +45,21 @@ def get_project_dirs():
     except OSError as e:
         logger.error(f"Error accessing base directory: {e}")
         return []
+
+def get_project_queue(project_path):
+    with worker_lock:
+        if project_path not in project_queues:
+            project_queues[project_path] = queue.Queue()
+        return project_queues[project_path]
+
+def ensure_worker_running(project_path):
+    with worker_lock:
+        if project_path not in active_workers or not active_workers[project_path].is_alive():
+            # Start a new worker
+            t = threading.Thread(target=project_worker, args=(project_path,), daemon=True)
+            active_workers[project_path] = t
+            t.start()
+            logger.info(f"Started worker for {project_path}")
 
 # --- Interaction Module: Directory Switching ---
 @bot.message_handler(commands=['cd', 'projects', 'start'])
@@ -78,11 +96,6 @@ def handle_project_selection(call):
 @bot.message_handler(commands=['create'])
 def create_project(message):
     try:
-        # Extract project name. Support both /create and \create if the user treats them similarly,
-        # but technically commands=['create'] only catches /create.
-        # The prompt asked for \create, but we'll implement standard /create.
-        # If we really want \create, we'd need a func filter.
-        # For now, we stick to standard Telegram /create.
         parts = message.text.split()
         if len(parts) < 2:
             bot.reply_to(message, "Usage: /create <project_name>")
@@ -113,14 +126,20 @@ def create_project(message):
 def handle_task(message):
     chat_id = message.chat.id
     current_dir = user_project_state.get(chat_id, BASE_DIR)
-
-    task_queue.put({
+    
+    # Get the queue for this specific project folder
+    q = get_project_queue(current_dir)
+    
+    task = {
         'chat_id': chat_id,
         'text': message.text,
         'cwd': current_dir
-    })
+    }
+    q.put(task)
+    
+    ensure_worker_running(current_dir)
 
-    bot.reply_to(message, f"📝 Task queued (Current Dir: {os.path.basename(current_dir)})\n{task_queue.qsize() - 1} tasks ahead.")
+    bot.reply_to(message, f"📝 Task queued for {os.path.basename(current_dir)}\n{q.qsize() - 1} tasks ahead in this folder.")
 
 # --- Execution Module: Background Consumption & Gemini Call ---
 def process_task(task):
@@ -167,17 +186,30 @@ def process_task(task):
             except:
                 pass
 
-def worker():
+def project_worker(project_path):
+    q = get_project_queue(project_path)
+    
     while True:
-        task = task_queue.get()
+        try:
+            # Wait for a task, timeout to let the thread die if idle (e.g. 5 mins) 
+            task = q.get(timeout=300) 
+        except queue.Empty:
+            # Check if we should exit
+            with worker_lock:
+                if q.empty():
+                    if project_path in active_workers:
+                        del active_workers[project_path]
+                    logger.info(f"Stopping worker for {project_path} (idle)")
+                    return
+            continue
+
         try:
             process_task(task)
         finally:
-            task_queue.task_done()
+            q.task_done()
 
 if __name__ == '__main__':
     if bot:
-        threading.Thread(target=worker, daemon=True).start()
         logger.info("🤖 Bot Daemon Started...")
         bot.infinity_polling()
     else:
