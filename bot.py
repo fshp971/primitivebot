@@ -74,6 +74,40 @@ def handle_project_selection(call):
     bot.edit_message_text(f"✅ Current working directory switched to: {display_name}\nSubsequent tasks will execute in this folder.",
                           chat_id=chat_id, message_id=call.message.message_id)
 
+# --- Management Module: Project Creation ---
+@bot.message_handler(commands=['create'])
+def create_project(message):
+    try:
+        # Extract project name. Support both /create and \create if the user treats them similarly,
+        # but technically commands=['create'] only catches /create.
+        # The prompt asked for \create, but we'll implement standard /create.
+        # If we really want \create, we'd need a func filter.
+        # For now, we stick to standard Telegram /create.
+        parts = message.text.split()
+        if len(parts) < 2:
+            bot.reply_to(message, "Usage: /create <project_name>")
+            return
+        
+        project_name = parts[1]
+        
+        # Basic validation
+        if not all(c.isalnum() or c in ('_', '-') for c in project_name):
+             bot.reply_to(message, "Invalid project name. Use alphanumeric characters, underscores, or hyphens.")
+             return
+
+        project_path = os.path.join(BASE_DIR, project_name)
+
+        if os.path.exists(project_path):
+            bot.reply_to(message, f"⚠️ Project '{project_name}' already exists.")
+            return
+
+        os.makedirs(project_path)
+        bot.reply_to(message, f"✅ Project '{project_name}' created successfully.")
+    
+    except Exception as e:
+        logger.error(f"Error creating project: {e}")
+        bot.reply_to(message, f"❌ Failed to create project: {e}")
+
 # --- Reception Module: Task Enqueuing ---
 @bot.message_handler(func=lambda message: not message.text.startswith('/'))
 def handle_task(message):

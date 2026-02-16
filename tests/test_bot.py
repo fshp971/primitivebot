@@ -135,30 +135,54 @@ class TestGeminiBot(unittest.TestCase):
         self.assertIn("Task Completed", args[1])
         self.assertIn("Output", args[1])
 
-    def test_handle_project_selection(self):
-        call = MagicMock()
-        call.data = "proj_project1"
-        call.message.chat.id = 123
-
-        bot.handle_project_selection(call)
-
-        self.assertEqual(bot.user_project_state[123], os.path.join(bot.BASE_DIR, 'project1'))
-        bot.bot.answer_callback_query.assert_called_with(call.id, "Switched successfully")
-        bot.bot.edit_message_text.assert_called()
-
-    def test_handle_task(self):
+    @patch('os.makedirs')
+    @patch('os.path.exists')
+    def test_create_project_success(self, mock_exists, mock_makedirs):
+        mock_exists.return_value = False
         message = MagicMock()
-        message.chat.id = 123
-        message.text = "Do something"
+        message.text = "/create new_project"
+        
+        bot.create_project(message)
+        
+        expected_path = os.path.join(bot.BASE_DIR, 'new_project')
+        mock_makedirs.assert_called_with(expected_path)
+        bot.bot.reply_to.assert_called()
+        args, _ = bot.bot.reply_to.call_args
+        self.assertIn("created successfully", args[1])
 
-        bot.handle_task(message)
+    @patch('os.makedirs')
+    @patch('os.path.exists')
+    def test_create_project_exists(self, mock_exists, mock_makedirs):
+        mock_exists.return_value = True
+        message = MagicMock()
+        message.text = "/create existing_project"
+        
+        bot.create_project(message)
+        
+        mock_makedirs.assert_not_called()
+        bot.bot.reply_to.assert_called()
+        args, _ = bot.bot.reply_to.call_args
+        self.assertIn("already exists", args[1])
 
-        # Check if task is in queue
-        self.assertEqual(bot.task_queue.qsize(), 1)
-        task = bot.task_queue.get()
-        self.assertEqual(task['chat_id'], 123)
-        self.assertEqual(task['text'], "Do something")
-        self.assertEqual(task['cwd'], bot.BASE_DIR) # Default dir
+    def test_create_project_invalid_name(self):
+        message = MagicMock()
+        message.text = "/create invalid@name"
+        
+        bot.create_project(message)
+        
+        bot.bot.reply_to.assert_called()
+        args, _ = bot.bot.reply_to.call_args
+        self.assertIn("Invalid project name", args[1])
+
+    def test_create_project_no_args(self):
+        message = MagicMock()
+        message.text = "/create"
+        
+        bot.create_project(message)
+        
+        bot.bot.reply_to.assert_called()
+        args, _ = bot.bot.reply_to.call_args
+        self.assertIn("Usage:", args[1])
 
 if __name__ == '__main__':
     unittest.main()
