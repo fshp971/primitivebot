@@ -122,7 +122,7 @@ class TestGeminiBot(unittest.TestCase):
 
         # Verify gemini-cli call
         mock_subprocess.assert_called_with(
-            ['gemini-cli', '--prompt', 'Run this'],
+            ['gemini', '--yolo', '--prompt', 'Run this'],
             cwd='/tmp/test_workspace/project1',
             capture_output=True,
             text=True,
@@ -134,35 +134,6 @@ class TestGeminiBot(unittest.TestCase):
         args, kwargs = bot.bot.send_message.call_args_list[-1]
         self.assertIn("Task Completed", args[1])
         self.assertIn("Output", args[1])
-
-    @patch('subprocess.run')
-    @patch('os.path.exists')
-    def test_process_task_with_context(self, mock_exists, mock_subprocess):
-        task = {
-            'chat_id': 123,
-            'text': 'Run this',
-            'cwd': '/tmp/test_workspace/project1'
-        }
-
-        # Mock context file exists
-        mock_exists.return_value = True
-
-        # Mock file open
-        with patch('builtins.open', mock_open(read_data="Context data")) as mock_file:
-            mock_subprocess.return_value = MagicMock(stdout="Output", stderr="")
-
-            bot.process_task(task)
-
-            # Verify prompt contains context
-            mock_subprocess.assert_called()
-            call_args = mock_subprocess.call_args
-            # call_args[0] is positional args. First arg is the list.
-            cmd_list = call_args[0][0]
-            self.assertEqual(cmd_list[0], 'gemini-cli')
-            self.assertEqual(cmd_list[1], '--prompt')
-            self.assertIn("[System Context]", cmd_list[2])
-            self.assertIn("Context data", cmd_list[2])
-            self.assertIn("Run this", cmd_list[2])
 
     def test_handle_project_selection(self):
         call = MagicMock()

@@ -98,23 +98,10 @@ def process_task(task):
     try:
         bot.send_message(chat_id, f"⚙️ Executing...\nDirectory: {os.path.basename(work_dir)}")
 
-        # Core Logic: Read project-specific System Prompt for context isolation
-        context_file = os.path.join(work_dir, '.gemini_context.txt')
-        final_prompt = task_text
-
-        # Check if context file exists and read it
-        if os.path.exists(context_file):
-            try:
-                with open(context_file, 'r', encoding='utf-8') as f:
-                    context_text = f.read().strip()
-                final_prompt = f"[System Context]\n{context_text}\n\n[Current Task]\n{task_text}"
-            except Exception as e:
-                bot.send_message(chat_id, f"⚠️ Failed to read context file: {e}")
-
-        # Call gemini-cli, strictly restricted to work_dir for safety
+        # Call gemini, strictly restricted to work_dir for safety
         try:
             result = subprocess.run(
-                ['gemini-cli', '--prompt', final_prompt],
+                ['gemini', '--yolo', '--prompt', task_text],
                 cwd=work_dir,
                 capture_output=True,
                 text=True,
@@ -126,7 +113,7 @@ def process_task(task):
                 reply += f"\n\n[Error/Warning]:\n{result.stderr}"
 
         except FileNotFoundError:
-             reply = "❌ Execution Failed: 'gemini-cli' not found. Please ensure it is installed and in PATH."
+             reply = "❌ Execution Failed: 'gemini' not found. Please ensure it is installed and in PATH."
         except subprocess.TimeoutExpired:
              reply = "❌ Execution Failed: Task timed out after 600 seconds."
         except Exception as e:
