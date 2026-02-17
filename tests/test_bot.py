@@ -127,8 +127,9 @@ class TestGeminiBot(unittest.TestCase):
         mock_ensure_worker.assert_called_with(bot.BASE_DIR)
 
     @patch('subprocess.run')
-    @patch('os.path.exists') # For context file check
-    def test_process_task(self, mock_exists, mock_subprocess):
+    @patch('os.path.exists')
+    @patch('os.path.isfile')
+    def test_process_task(self, mock_isfile, mock_exists, mock_subprocess):
         # Setup task
         task = {
             'chat_id': 123,
@@ -136,7 +137,9 @@ class TestGeminiBot(unittest.TestCase):
             'cwd': '/tmp/test_workspace/project1'
         }
 
-        mock_exists.return_value = False # No context file
+        # No AGENT.md
+        mock_exists.return_value = False 
+        mock_isfile.return_value = False
         mock_subprocess.return_value = MagicMock(stdout="Output", stderr="")
 
         bot.process_task(task)
@@ -155,6 +158,45 @@ class TestGeminiBot(unittest.TestCase):
         args, kwargs = bot.bot.send_message.call_args_list[-1]
         self.assertIn("Task Completed", args[1])
         self.assertIn("Output", args[1])
+
+    @patch('subprocess.run')
+    @patch('os.path.exists')
+    @patch('os.path.isfile')
+    @patch('builtins.open', new_callable=mock_open, read_data="Use strict mode.")
+    def test_process_task_with_agent_md(self, mock_file, mock_isfile, mock_exists, mock_subprocess):
+        # Setup task
+        task = {
+            'chat_id': 123,
+            'text': 'Fix bug',
+            'cwd': '/tmp/test_workspace/project1'
+        }
+
+        # Mock AGENT.md exists
+        # We need to handle os.path.join calls.
+        # If path ends with AGENT.md, return True.
+        def exists_side_effect(path):
+            if path.endswith('AGENT.md'):
+                return True
+            return False
+        
+        mock_exists.side_effect = exists_side_effect
+        mock_isfile.side_effect = exists_side_effect
+        
+        mock_subprocess.return_value = MagicMock(stdout="Output", stderr="")
+
+        bot.process_task(task)
+
+        # Expected combined prompt
+        expected_prompt = "--- Agent Rules ---\nUse strict mode.\n--- End Rules ---\n\nFix bug"
+
+        # Verify gemini-cli call with prepended rules
+        mock_subprocess.assert_called_with(
+            ['gemini', '--yolo', '--prompt', expected_prompt],
+            cwd='/tmp/test_workspace/project1',
+            capture_output=True,
+            text=True,
+            timeout=600
+        )
 
     @patch('os.makedirs')
     @patch('os.path.exists')

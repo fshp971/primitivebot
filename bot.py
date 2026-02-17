@@ -165,6 +165,18 @@ def process_task(task):
     try:
         bot.send_message(chat_id, f"⚙️ Executing...\nDirectory: {os.path.basename(work_dir)}")
 
+        # Check for AGENT.md in the current working directory
+        agent_rules_path = os.path.join(BASE_DIR, 'AGENT.md')
+        if os.path.exists(agent_rules_path) and os.path.isfile(agent_rules_path):
+            try:
+                with open(agent_rules_path, 'r') as f:
+                    agent_rules = f.read()
+                task_text = f"--- Agent Rules ---\n{agent_rules}\n--- End Rules ---\n\n{task_text}"
+                logger.info(f"Loaded AGENT.md for task in {work_dir}")
+            except Exception as e:
+                logger.error(f"Failed to read AGENT.md: {e}")
+                bot.send_message(chat_id, f"⚠️ Warning: Found AGENT.md but failed to read it: {e}")
+
         # Call gemini, strictly restricted to work_dir for safety
         try:
             result = subprocess.run(
