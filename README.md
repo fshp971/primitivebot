@@ -1,20 +1,25 @@
 # Telegram-Gemini Task Queue Bot
 
-This project implements a Telegram Bot that serves as an interface for `gemini-cli`, allowing users to queue and execute tasks in a specific directory context. It uses a long-polling mechanism running within a single container to ensure stability and persistence, avoiding the limitations of serverless environments.
+This project implements a Telegram Bot that serves as an interface for `gemini-cli`, allowing users to queue and execute tasks in specific project directories. It features a robust concurrency model where tasks for different projects run in parallel, while tasks within the same project are executed sequentially to ensure safety.
+
+## Key Features
+
+1.  **Per-Project Concurrency:** 
+    -   Each project folder has its own independent task queue and worker thread.
+    -   Tasks submitted to "Project A" and "Project B" run simultaneously without blocking each other.
+2.  **Sequential Execution:** 
+    -   Tasks within a single project (e.g., "Project A") are executed one by one in the order they were received.
+    -   This prevents race conditions and conflicts when modifying files within the same project.
+3.  **Context Switching:** 
+    -   Users can seamlessly switch between projects using `/cd` or the menu.
+    -   Switching context does not interrupt running tasks in other projects.
+4.  **Persistent Architecture:**
+    -   Runs as a long-polling daemon inside a Docker container, avoiding serverless timeouts.
 
 ## Architecture
 
-The project is built around the following core concepts:
-
-1.  **Single-Container Long Polling:** The bot runs as a persistent process (daemon) inside a Docker container. This avoids timeouts associated with serverless functions and allows for long-running tasks.
-2.  **In-Memory Task Queue:** A `queue.Queue` handles incoming tasks sequentially. This ensures that tasks are processed one by one, preventing race conditions on file operations within the same directory.
-3.  **Directory-Based Context:** Users can switch their "working directory" using Telegram commands. The bot maintains a session state mapping each user to a specific directory in the mounted volume.
-4.  **Context Injection:** If a `.gemini_context.txt` file exists in the current working directory, its content is automatically prepended to the user's prompt as a "System Context". This allows for project-specific instructions (e.g., "Use LaTeX for math", "Write Python code").
-
-### Components
-
-*   **`bot.py`**: The main entry point. It initializes the Telegram bot, handles commands (`/start`, `/cd`), manages the task queue, and runs a worker thread that executes `gemini-cli` as a subprocess.
-*   **`Dockerfile`**: Defines the container environment, installing Python 3.10, Node.js (for `gemini-cli`), and necessary dependencies.
+*   **`bot.py`**: The main application logic. It manages a dynamic set of `queue.Queue` objects and worker threads—one pair for each active project.
+*   **`Dockerfile`**: Defines the container environment, including Python 3.10, Node.js (for `gemini-cli`), and system dependencies.
 *   **`requirements.txt`**: Python dependencies (`pyTelegramBotAPI`, `python-dotenv`).
 
 ## Project Organization
@@ -29,13 +34,84 @@ The project is built around the following core concepts:
     └── test_bot.py         # Tests for bot.py
 ```
 
-## Setup and Usage
+## Deployment Guide
 
 ### Prerequisites
-*   Docker
-*   A Telegram Bot Token (from @BotFather)
+*   **Docker** installed on your host machine.
+*   A **Telegram Bot Token** (obtained from @BotFather).
+*   **SSH Keys** (optional but recommended) on your host machine for git operations inside the container.
 
-### Local Development
+### 1. Configuration (`.env`)
+
+Create a `.env` file on your host machine to store your secrets.
+
+```ini
+# .env
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
+# Optional: defaults to /workspace inside the container
+WORKSPACE_DIR=/workspace 
+```
+
+### 2. Directory Structure
+
+We recommend the following structure on your host machine:
+
+```text
+/home/user/my-bot-deployment/
+├── .env                # Your configuration file
+├── projects/           # Folder containing all your project subfolders
+│   ├── project-a/
+│   └── project-b/
+└── ...
+```
+
+### 3. Docker Run Command
+
+Use the following command to start the bot. This mounts your configuration, project files, and SSH keys into the container.
+
+```bash
+docker run -d \
+  --name gemini-bot \
+  --restart unless-stopped \
+  \
+  # 1. Mount the .env file
+  --env-file /home/user/my-bot-deployment/.env \
+  \
+  # 2. Mount your Projects folder to /workspace
+  #    The bot will look for folders INSIDE /workspace
+  -v /home/user/my-bot-deployment/projects:/workspace \
+  \
+  # 3. Inject SSH Keys (Read-only recommended)
+  #    This maps your host's ~/.ssh to the container root's .ssh
+  -v $HOME/.ssh:/root/.ssh:ro \
+  \
+  your-image-name
+```
+
+**Note on SSH Keys:**
+Mounting `$HOME/.ssh` allows the `gemini-cli` inside the container to authenticate with GitHub/GitLab using your host's credentials. Ensure your `known_hosts` file is populated to avoid interactive prompts.
+
+### 4. Usage
+
+1.  **Start the Bot:** Send `/start` or `/projects` to list available project folders in your mounted `projects/` directory.
+2.  **Select a Project:** Click on a project name to switch your context.
+3.  **Execute Tasks:** Send any text message (e.g., "Refactor the login function").
+    -   The task will be queued for the *currently selected* project.
+    -   If the project is busy, it waits its turn.
+    -   If the project is idle, it starts immediately, potentially running in parallel with other projects.
+4.  **Create Projects:** Use `/create <project_name>` to create a new folder in the workspace.
+
+## Development
+
+### Running Tests
+The project includes a comprehensive test suite in `tests/test_bot.py`.
+
+```bash
+# Run tests from the project root
+PYTHONPATH=. python3 -m unittest discover tests
+```
+
+### Local Setup (Non-Docker)
 1.  Install dependencies:
     ```bash
     pip install -r requirements.txt
@@ -43,52 +119,10 @@ The project is built around the following core concepts:
     ```
 2.  Set environment variables:
     ```bash
-    export TELEGRAM_BOT_TOKEN="your_token_here"
-    export WORKSPACE_DIR="/path/to/your/workspace"
+    export TELEGRAM_BOT_TOKEN="your_token"
+    export WORKSPACE_DIR="/path/to/projects"
     ```
 3.  Run the bot:
     ```bash
     python bot.py
     ```
-
-### Docker Deployment
-
-1.  **Build the image:**
-    ```bash
-    docker build -t gemini-worker .
-    ```
-
-2.  **Run the container:**
-    Mount your local workspace directory to `/workspace` inside the container.
-    ```bash
-    docker run -d \
-      --name my-gemini-worker \
-      --restart unless-stopped \
-      -e TELEGRAM_BOT_TOKEN="your_token_here" \
-      -v /path/to/host/projects:/workspace \
-      gemini-worker
-    ```
-
-### Bot Commands
-*   `/start`, `/cd`, `/projects`: List available project directories in the workspace and allow switching context.
-*   **Text Message**: Any text message sent to the bot is treated as a task. It is queued and executed by `gemini-cli` in the currently selected directory.
-
-## Testing
-
-The project includes unit tests to verify the logic of the bot without requiring a real Telegram connection or `gemini-cli` installation.
-
-### Organization of Unit Tests
-Tests are located in `tests/test_bot.py`. They use `unittest` and `unittest.mock`.
-
-*   **Mocking:** `telebot` is mocked at the module level to prevent network calls during import. `subprocess.run`, `os.listdir`, and file operations are also mocked.
-*   **Coverage:**
-    *   `test_list_projects`: Verifies directory listing and empty workspace handling.
-    *   `test_handle_project_selection`: Verifies session state updates when a user selects a project.
-    *   `test_handle_task`: Verifies that tasks are correctly added to the queue with the correct context.
-    *   `test_process_task`: Verifies that the worker function constructs the correct `gemini-cli` command, including context injection if `.gemini_context.txt` is present.
-
-### Running Tests
-Execute the following command from the project root:
-```bash
-python3 -m unittest discover tests
-```
