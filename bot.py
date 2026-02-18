@@ -234,8 +234,36 @@ def project_worker(project_path):
         finally:
             q.task_done()
 
+def initialize_bot():
+    """Performs initialization using gemini-cli and INIT.md if it exists."""
+    init_file = os.path.join(BASE_DIR, 'INIT.md')
+    if os.path.exists(init_file):
+        logger.info(f"Initializing bot with {init_file}...")
+        try:
+            result = subprocess.run(
+                ['gemini', '--yolo', '--prompt', f"Initialize according to @{init_file}"],
+                cwd=BASE_DIR,
+                capture_output=True,
+                text=True,
+                timeout=600
+            )
+            if result.returncode == 0:
+                logger.info("Bot initialization successful.")
+                if result.stdout:
+                    logger.info(f"Initialization Output: {result.stdout}")
+            else:
+                logger.error(f"Bot initialization failed with exit code {result.returncode}")
+                if result.stderr:
+                    logger.error(f"Initialization Error: {result.stderr}")
+        except Exception as e:
+            logger.error(f"Error during bot initialization: {e}")
+    else:
+        logger.info(f"No initialization file found at {init_file}. Skipping initialization.")
+
 if __name__ == '__main__':
     if bot:
+        logger.info("🤖 Bot Daemon Starting...")
+        initialize_bot()
         logger.info("🤖 Bot Daemon Started...")
         bot.infinity_polling()
     else:
