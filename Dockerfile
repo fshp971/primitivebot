@@ -12,7 +12,8 @@ RUN apt-get update && \
 # Install gemini-cli globally
 # Note: Assuming 'gemini-cli' is the package name. Adjust if it's scoped (e.g., @google/gemini-cli)
 # The prototype says 'gemini-cli', so we stick with it.
-RUN npm install -g gemini-cli
+# RUN npm install -g gemini-cli
+RUN npm install -g @google/gemini-cli
 
 # Set working directory
 WORKDIR /app
