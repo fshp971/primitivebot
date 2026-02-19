@@ -1,6 +1,6 @@
-# Telegram-Gemini Task Queue Bot
+# Primitive Bot
 
-This project implements a Telegram Bot that serves as an interface for `gemini-cli`, allowing users to queue and execute tasks in specific project directories. It features a robust concurrency model where tasks for different projects run in parallel, while tasks within the same project are executed sequentially to ensure safety.
+this is simple app for primitives to operate gemini-cli through telegram. It implements a Telegram Bot that serves as an interface for `gemini-cli`, allowing users to queue and execute tasks in specific project directories. It features a robust concurrency model where tasks for different projects run in parallel, while tasks within the same project are executed sequentially to ensure safety.
 
 ## Key Features
 
