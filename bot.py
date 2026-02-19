@@ -48,7 +48,7 @@ active_workers = {}  # Map: project_path -> threading.Thread
 worker_lock = threading.Lock()
 user_project_state = {}
 
-HOME_DIR = os.environ.get("HOME_DIR", "~/")
+HOME_DIR = os.environ.get("HOME", "/root")
 WORKSPACE_DIR = os.environ.get('WORKSPACE_DIR', '/workspace')
 
 def get_project_dirs():
