@@ -34,14 +34,34 @@ This project implements a Telegram Bot that serves as an interface for `gemini-c
     └── test_bot.py         # Tests for bot.py
 ```
 
-## Deployment Guide
+## Quick Start with Bot Space
 
-### Prerequisites
+A "Bot Space" is a directory structure that organizes your bot's configuration, persistent home directory, and projects.
+
+### 1. Prerequisites
 *   **Docker** installed on your host machine.
 *   A **Telegram Bot Token** (obtained from @BotFather).
-*   **SSH Keys** (optional but recommended) on your host machine for git operations inside the container.
 
-### 1. Configuration (`.env`)
+### 2. Build the Docker Image
+```bash
+docker build -t primitivebot:latest .
+```
+
+### 3. Recommended Structure
+
+```text
+my-bot-space/
+├── .env                # Telegram token and other secrets
+├── start_bot.sh        # Script to launch the bot
+├── home/               # Persisted as /root inside the container
+│   ├── AGENT.md        # (Optional) Custom instructions for the agent
+│   └── INIT.md         # (Optional) Initialization script for the bot
+└── projects/           # Persisted as /workspace inside the container
+    ├── my-app/
+    └── another-repo/
+```
+
+### 4. Configuring your Bot
 
 Create a `.env` file on your host machine to store your secrets.
 
@@ -51,47 +71,26 @@ TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
 # Optional: defaults to /workspace inside the container
 WORKSPACE_DIR=/workspace 
 ```
+You can control your bot's behavior by placing two special files in the `home/` directory:
 
-### 2. Directory Structure
+-   **`AGENT.md`**: These instructions are prepended to *every* task sent to the bot. Use it to define coding styles, security rules (like "never commit secrets"), or specific tool usage preferences.
+-   **`INIT.md`**: This file is executed *once* when the bot starts up. Use it to configure global settings like `git config`, install common tools, or verify environment variables.
 
-We recommend the following structure on your host machine:
+### 5. Using Examples
 
-```text
-/home/user/my-bot-deployment/
-├── .env                # Your configuration file
-├── projects/           # Folder containing all your project subfolders
-│   ├── project-a/
-│   └── project-b/
-└── ...
-```
+We provide a pre-configured example in the `examples/` directory:
 
-### 3. Docker Run Command
+-   [**`github_bot`**](./examples/github_bot): Optimized for working with GitHub, including PAT management and git configuration.
 
-Use the following command to start the bot. This mounts your configuration, project files, and SSH keys into the container.
+To use an example:
+1. Copy the example's `home/` and `start.sh` to your bot space.
+2. Create your `.env` file with `TELEGRAM_BOT_TOKEN`.
+3. **(Optional) To use Gemini with a Google account login:**
+   - Create a `.gemini` folder inside your `home/` directory.
+   - Copy `oauth_creds.json`, `google_accounts.json` and `settings.json` from your local `~/.gemini/` folder to `home/.gemini/`.
+4. Run `bash start.sh`.
 
-```bash
-docker run -d \
-  --name gemini-bot \
-  --restart unless-stopped \
-  \
-  # 1. Mount the .env file
-  --env-file /home/user/my-bot-deployment/.env \
-  \
-  # 2. Mount your Projects folder to /workspace
-  #    The bot will look for folders INSIDE /workspace
-  -v /home/user/my-bot-deployment/projects:/workspace \
-  \
-  # 3. Inject SSH Keys (Read-only recommended)
-  #    This maps your host's ~/.ssh to the container root's .ssh
-  -v $HOME/.ssh:/root/.ssh:ro \
-  \
-  your-image-name
-```
-
-**Note on SSH Keys:**
-Mounting `$HOME/.ssh` allows the `gemini-cli` inside the container to authenticate with GitHub/GitLab using your host's credentials. Ensure your `known_hosts` file is populated to avoid interactive prompts.
-
-### 4. Usage
+### 6. Usage
 
 1.  **Start the Bot:** Send `/start` or `/projects` to list available project folders in your mounted `projects/` directory.
 2.  **Select a Project:** Click on a project name to switch your context.
@@ -115,7 +114,7 @@ PYTHONPATH=. python3 -m unittest discover tests
 1.  Install dependencies:
     ```bash
     pip install -r requirements.txt
-    npm install -g gemini-cli
+    npm install -g @google/gemini-cli
     ```
 2.  Set environment variables:
     ```bash
