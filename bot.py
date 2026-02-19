@@ -180,7 +180,8 @@ def process_task(task):
         # Call gemini, strictly restricted to work_dir for safety
         try:
             result = subprocess.run(
-                ['gemini', '--yolo', '--prompt', task_text],
+                ['gemini', '--yolo', '--prompt', '-'],
+                input=task_text,
                 cwd=work_dir,
                 capture_output=True,
                 text=True,
