@@ -48,14 +48,15 @@ active_workers = {}  # Map: project_path -> threading.Thread
 worker_lock = threading.Lock()
 user_project_state = {}
 
-BASE_DIR = os.environ.get('WORKSPACE_DIR', '/workspace')
+HOME_DIR = os.environ.get("HOME_DIR", "~/")
+WORKSPACE_DIR = os.environ.get('WORKSPACE_DIR', '/workspace')
 
 def get_project_dirs():
     """Scans all project folders in the mounted directory."""
-    if not os.path.exists(BASE_DIR):
+    if not os.path.exists(WORKSPACE_DIR):
         return []
     try:
-        return [d for d in os.listdir(BASE_DIR) if os.path.isdir(os.path.join(BASE_DIR, d))]
+        return [d for d in os.listdir(WORKSPACE_DIR) if os.path.isdir(os.path.join(WORKSPACE_DIR, d))]
     except OSError as e:
         logger.error(f"Error accessing base directory: {e}")
         return []
@@ -96,10 +97,10 @@ def handle_project_selection(call):
     chat_id = call.message.chat.id
 
     if project_name == "ROOT":
-        user_project_state[chat_id] = BASE_DIR
-        display_name = f"Root Directory {BASE_DIR}"
+        user_project_state[chat_id] = WORKSPACE_DIR
+        display_name = f"Root Directory {WORKSPACE_DIR}"
     else:
-        user_project_state[chat_id] = os.path.join(BASE_DIR, project_name)
+        user_project_state[chat_id] = os.path.join(WORKSPACE_DIR, project_name)
         display_name = project_name
 
     bot.answer_callback_query(call.id, "Switched successfully")
@@ -122,7 +123,7 @@ def create_project(message):
              bot.reply_to(message, "Invalid project name. Use alphanumeric characters, underscores, or hyphens.")
              return
 
-        project_path = os.path.join(BASE_DIR, project_name)
+        project_path = os.path.join(WORKSPACE_DIR, project_name)
 
         if os.path.exists(project_path):
             bot.reply_to(message, f"⚠️ Project '{project_name}' already exists.")
@@ -139,7 +140,7 @@ def create_project(message):
 @bot.message_handler(func=lambda message: not message.text.startswith('/'))
 def handle_task(message):
     chat_id = message.chat.id
-    current_dir = user_project_state.get(chat_id, BASE_DIR)
+    current_dir = user_project_state.get(chat_id, WORKSPACE_DIR)
     
     # Get the queue for this specific project folder
     q = get_project_queue(current_dir)
@@ -166,7 +167,7 @@ def process_task(task):
         bot.send_message(chat_id, f"⚙️ Executing...\nDirectory: {os.path.basename(work_dir)}")
 
         # Check for AGENT.md in the current working directory
-        agent_rules_path = os.path.join(BASE_DIR, 'AGENT.md')
+        agent_rules_path = os.path.join(HOME_DIR, 'AGENT.md')
         if os.path.exists(agent_rules_path) and os.path.isfile(agent_rules_path):
             try:
                 with open(agent_rules_path, 'r') as f:
@@ -237,13 +238,13 @@ def project_worker(project_path):
 
 def initialize_bot():
     """Performs initialization using gemini-cli and INIT.md if it exists."""
-    init_file = os.path.join(BASE_DIR, 'INIT.md')
+    init_file = os.path.join(HOME_DIR, 'INIT.md')
     if os.path.exists(init_file):
         logger.info(f"Initializing bot with {init_file}...")
         try:
             result = subprocess.run(
                 ['gemini', '--yolo', '--prompt', f"Initialize according to @{init_file}"],
-                cwd=BASE_DIR,
+                cwd=WORKSPACE_DIR,
                 capture_output=True,
                 text=True,
                 timeout=600
