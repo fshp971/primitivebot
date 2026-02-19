@@ -6,6 +6,9 @@ RUN apt-get update && \
     nodejs \
     npm \
     git \
+    wget \
+    curl \
+    vim \
     && apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 

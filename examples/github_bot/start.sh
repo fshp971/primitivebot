@@ -11,6 +11,9 @@ PROJECTS_DIR="$(pwd)/projects"
 mkdir -p "$HOME_DIR"
 mkdir -p "$PROJECTS_DIR"
 
+# Ensure permission completeness
+cp $HOME_DIR/*.md $PROJECTS_DIR
+
 # Run the bot
 docker run --rm -d \
   --name "$BOT_NAME" \

@@ -51,7 +51,6 @@ running_tasks = {}   # Map: project_path -> dict(process, task, start_time)
 worker_lock = threading.Lock()
 user_project_state = {}
 
-HOME_DIR = os.environ.get("HOME", "/root")
 WORKSPACE_DIR = os.environ.get('WORKSPACE_DIR', '/workspace')
 
 def get_project_dirs():
@@ -203,7 +202,7 @@ def process_task(task):
         bot.send_message(chat_id, f"⚙️ Executing...\nDirectory: {os.path.basename(work_dir)}")
 
         # Check for AGENT.md in the current working directory
-        agent_rules_path = os.path.join(HOME_DIR, 'AGENT.md')
+        agent_rules_path = os.path.join(WORKSPACE_DIR, 'AGENT.md')
         if os.path.exists(agent_rules_path) and os.path.isfile(agent_rules_path):
             try:
                 with open(agent_rules_path, 'r') as f:
@@ -296,7 +295,7 @@ def project_worker(project_path):
 
 def initialize_bot():
     """Performs initialization using gemini-cli and INIT.md if it exists."""
-    init_file = os.path.join(HOME_DIR, 'INIT.md')
+    init_file = os.path.join(WORKSPACE_DIR, 'INIT.md')
     if os.path.exists(init_file):
         logger.info(f"Initializing bot with {init_file}...")
         try:
