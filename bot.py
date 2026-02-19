@@ -17,6 +17,8 @@ import subprocess
 import threading
 import queue
 import logging
+import time
+import signal
 from dotenv import load_dotenv
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -45,6 +47,7 @@ except Exception as e:
 # Global state for queues and workers
 project_queues = {}  # Map: project_path -> queue.Queue
 active_workers = {}  # Map: project_path -> threading.Thread
+running_tasks = {}   # Map: project_path -> dict(process, task, start_time)
 worker_lock = threading.Lock()
 user_project_state = {}
 
@@ -136,6 +139,39 @@ def create_project(message):
         logger.error(f"Error creating project: {e}")
         bot.reply_to(message, f"❌ Failed to create project: {e}")
 
+@bot.message_handler(commands=['status'])
+def show_status(message):
+    with worker_lock:
+        active_projects = [p for p, q in project_queues.items() if not q.empty()]
+        
+        if not running_tasks and not active_projects:
+            bot.reply_to(message, "📭 No tasks running or queued.")
+            return
+
+        status_msg = "📊 **System Status**\n\n"
+        
+        if running_tasks:
+            status_msg += "🏃 **Running Tasks:**\n"
+            for path, info in running_tasks.items():
+                project_name = os.path.basename(path) or "Root"
+                task_text = info['task']['text']
+                # Truncate task text if too long
+                task_preview = (task_text[:30] + '...') if len(task_text) > 30 else task_text
+                elapsed = int(time.time() - info['start_time'])
+                status_msg += f"- `{project_name}`: {task_preview} ({elapsed}s)\n"
+            status_msg += "\n"
+
+        has_queued = False
+        for path, q in project_queues.items():
+            if not q.empty():
+                if not has_queued:
+                    status_msg += "⏳ **Queued Tasks:**\n"
+                    has_queued = True
+                project_name = os.path.basename(path) or "Root"
+                status_msg += f"- `{project_name}`: {q.qsize()} tasks waiting\n"
+        
+        bot.send_message(message.chat.id, status_msg, parse_mode='Markdown')
+
 # --- Reception Module: Task Enqueuing ---
 @bot.message_handler(func=lambda message: not message.text.startswith('/'))
 def handle_task(message):
@@ -180,23 +216,45 @@ def process_task(task):
 
         # Call gemini, strictly restricted to work_dir for safety
         try:
-            result = subprocess.run(
+            # We use Popen to allow tracking and future termination
+            process = subprocess.Popen(
                 ['gemini', '--yolo', '--prompt', '-'],
-                input=task_text,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 cwd=work_dir,
-                capture_output=True,
                 text=True,
-                timeout=600
+                preexec_fn=os.setsid  # To allow killing the whole process group later
             )
 
-            reply = f"✅ Task Completed\n\n[Output]:\n{result.stdout}"
-            if result.stderr:
-                reply += f"\n\n[Error/Warning]:\n{result.stderr}"
+            with worker_lock:
+                running_tasks[work_dir] = {
+                    'process': process,
+                    'task': task,
+                    'start_time': time.time()
+                }
+
+            try:
+                stdout, stderr = process.communicate(input=task_text, timeout=600)
+                
+                reply = f"✅ Task Completed\n\n[Output]:\n{stdout}"
+                if stderr:
+                    reply += f"\n\n[Error/Warning]:\n{stderr}"
+            except subprocess.TimeoutExpired:
+                 # Kill the whole process group
+                 try:
+                     os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+                 except:
+                     pass
+                 process.communicate() # ensure it is cleaned up
+                 reply = "❌ Execution Failed: Task timed out after 600 seconds."
+            finally:
+                with worker_lock:
+                    if work_dir in running_tasks:
+                        del running_tasks[work_dir]
 
         except FileNotFoundError:
              reply = "❌ Execution Failed: 'gemini' not found. Please ensure it is installed and in PATH."
-        except subprocess.TimeoutExpired:
-             reply = "❌ Execution Failed: Task timed out after 600 seconds."
         except Exception as e:
             reply = f"❌ Execution Crashed: {str(e)}"
 

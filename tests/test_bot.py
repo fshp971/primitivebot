@@ -18,6 +18,7 @@ import os
 import sys
 import queue
 import threading
+import time
 
 # Set environment variable for testing before importing bot
 os.environ['TELEGRAM_BOT_TOKEN'] = 'TEST_TOKEN'
@@ -48,8 +49,9 @@ class TestGeminiBot(unittest.TestCase):
         bot.bot = MagicMock()
         bot.project_queues = {}
         bot.active_workers = {}
+        bot.running_tasks = {}
         bot.user_project_state = {}
-        bot.BASE_DIR = '/tmp/test_workspace'
+        bot.WORKSPACE_DIR = '/tmp/test_workspace'
 
     @patch('os.listdir')
     @patch('os.path.exists')
@@ -103,7 +105,7 @@ class TestGeminiBot(unittest.TestCase):
 
         bot.handle_project_selection(call)
 
-        self.assertEqual(bot.user_project_state[123], os.path.join(bot.BASE_DIR, 'project1'))
+        self.assertEqual(bot.user_project_state[123], os.path.join(bot.WORKSPACE_DIR, 'project1'))
         bot.bot.answer_callback_query.assert_called_with(call.id, "Switched successfully")
         bot.bot.edit_message_text.assert_called()
 
@@ -116,20 +118,20 @@ class TestGeminiBot(unittest.TestCase):
         bot.handle_task(message)
 
         # Check if task is in the correct queue
-        q = bot.get_project_queue(bot.BASE_DIR)
+        q = bot.get_project_queue(bot.WORKSPACE_DIR)
         self.assertEqual(q.qsize(), 1)
 
         task = q.get()
         self.assertEqual(task['chat_id'], 123)
         self.assertEqual(task['text'], "Do something")
-        self.assertEqual(task['cwd'], bot.BASE_DIR) # Default dir
+        self.assertEqual(task['cwd'], bot.WORKSPACE_DIR) # Default dir
 
-        mock_ensure_worker.assert_called_with(bot.BASE_DIR)
+        mock_ensure_worker.assert_called_with(bot.WORKSPACE_DIR)
 
-    @patch('subprocess.run')
+    @patch('subprocess.Popen')
     @patch('os.path.exists')
     @patch('os.path.isfile')
-    def test_process_task(self, mock_isfile, mock_exists, mock_subprocess):
+    def test_process_task(self, mock_isfile, mock_exists, mock_popen):
         # Setup task
         task = {
             'chat_id': 123,
@@ -140,18 +142,20 @@ class TestGeminiBot(unittest.TestCase):
         # No AGENT.md
         mock_exists.return_value = False 
         mock_isfile.return_value = False
-        mock_subprocess.return_value = MagicMock(stdout="Output", stderr="")
+        
+        mock_process = MagicMock()
+        mock_process.communicate.return_value = ("Output", "")
+        mock_popen.return_value = mock_process
 
         bot.process_task(task)
 
         # Verify gemini-cli call
-        mock_subprocess.assert_called_with(
-            ['gemini', '--yolo', '--prompt', 'Run this'],
-            cwd='/tmp/test_workspace/project1',
-            capture_output=True,
-            text=True,
-            timeout=600
-        )
+        mock_popen.assert_called()
+        args, kwargs = mock_popen.call_args
+        self.assertEqual(args[0], ['gemini', '--yolo', '--prompt', '-'])
+        self.assertEqual(kwargs['cwd'], '/tmp/test_workspace/project1')
+
+        mock_process.communicate.assert_called_with(input='Run this', timeout=600)
 
         # Verify bot reply
         bot.bot.send_message.assert_called()
@@ -159,11 +163,11 @@ class TestGeminiBot(unittest.TestCase):
         self.assertIn("Task Completed", args[1])
         self.assertIn("Output", args[1])
 
-    @patch('subprocess.run')
+    @patch('subprocess.Popen')
     @patch('os.path.exists')
     @patch('os.path.isfile')
     @patch('builtins.open', new_callable=mock_open, read_data="Use strict mode.")
-    def test_process_task_with_agent_md(self, mock_file, mock_isfile, mock_exists, mock_subprocess):
+    def test_process_task_with_agent_md(self, mock_file, mock_isfile, mock_exists, mock_popen):
         # Setup task
         task = {
             'chat_id': 123,
@@ -172,8 +176,6 @@ class TestGeminiBot(unittest.TestCase):
         }
 
         # Mock AGENT.md exists
-        # We need to handle os.path.join calls.
-        # If path ends with AGENT.md, return True.
         def exists_side_effect(path):
             if path.endswith('AGENT.md'):
                 return True
@@ -182,21 +184,17 @@ class TestGeminiBot(unittest.TestCase):
         mock_exists.side_effect = exists_side_effect
         mock_isfile.side_effect = exists_side_effect
         
-        mock_subprocess.return_value = MagicMock(stdout="Output", stderr="")
+        mock_process = MagicMock()
+        mock_process.communicate.return_value = ("Output", "")
+        mock_popen.return_value = mock_process
 
         bot.process_task(task)
 
         # Expected combined prompt
         expected_prompt = "--- Agent Rules ---\nUse strict mode.\n--- End Rules ---\n\nFix bug"
 
-        # Verify gemini-cli call with prepended rules
-        mock_subprocess.assert_called_with(
-            ['gemini', '--yolo', '--prompt', expected_prompt],
-            cwd='/tmp/test_workspace/project1',
-            capture_output=True,
-            text=True,
-            timeout=600
-        )
+        # Verify gemini-cli call with prepended rules via communicate
+        mock_process.communicate.assert_called_with(input=expected_prompt, timeout=600)
 
     @patch('os.makedirs')
     @patch('os.path.exists')
@@ -207,7 +205,7 @@ class TestGeminiBot(unittest.TestCase):
 
         bot.create_project(message)
 
-        expected_path = os.path.join(bot.BASE_DIR, 'new_project')
+        expected_path = os.path.join(bot.WORKSPACE_DIR, 'new_project')
         mock_makedirs.assert_called_with(expected_path)
         bot.bot.reply_to.assert_called()
         args, _ = bot.bot.reply_to.call_args
@@ -246,6 +244,32 @@ class TestGeminiBot(unittest.TestCase):
         bot.bot.reply_to.assert_called()
         args, _ = bot.bot.reply_to.call_args
         self.assertIn("Usage:", args[1])
+
+    def test_show_status_empty(self):
+        message = MagicMock()
+        bot.show_status(message)
+        bot.bot.reply_to.assert_called_with(message, "📭 No tasks running or queued.")
+
+    def test_show_status_active(self):
+        # Mock a running task
+        bot.running_tasks['/tmp/test_workspace/project1'] = {
+            'task': {'text': 'Running Task'},
+            'start_time': time.time()
+        }
+        
+        # Mock a queued task
+        q = bot.get_project_queue('/tmp/test_workspace/project2')
+        q.put({'text': 'Queued Task'})
+        
+        message = MagicMock()
+        bot.show_status(message)
+        
+        bot.bot.send_message.assert_called()
+        args, kwargs = bot.bot.send_message.call_args
+        self.assertIn("Running Tasks", args[1])
+        self.assertIn("Queued Tasks", args[1])
+        self.assertIn("project1", args[1])
+        self.assertIn("project2", args[1])
 
     def test_get_project_queue(self):
         q1 = bot.get_project_queue('p1')

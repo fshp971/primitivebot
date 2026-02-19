@@ -99,6 +99,7 @@ To use an example:
     -   If the project is busy, it waits its turn.
     -   If the project is idle, it starts immediately, potentially running in parallel with other projects.
 4.  **Create Projects:** Use `/create <project_name>` to create a new folder in the workspace.
+5.  **Check Status:** Use `/status` to see a list of currently running tasks and the number of tasks in each project's queue.
 
 ## Development
 
