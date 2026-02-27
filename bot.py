@@ -19,6 +19,7 @@ import queue
 import logging
 import time
 import signal
+import yaml
 from dotenv import load_dotenv
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -32,6 +33,22 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+# Load configuration from YAML file
+CONFIG_FILE = os.path.join(os.path.dirname(__file__), 'config.yaml')
+config = {}
+if os.path.exists(CONFIG_FILE):
+    try:
+        with open(CONFIG_FILE, 'r') as f:
+            config = yaml.safe_load(f) or {}
+            logger.info(f"Loaded configuration from {CONFIG_FILE}")
+    except Exception as e:
+        logger.error(f"Error loading {CONFIG_FILE}: {e}")
+else:
+    logger.info(f"No configuration file found at {CONFIG_FILE}. Using defaults.")
+
+# Default parameters
+TASK_TIMEOUT = config.get('task_running_timeout_seconds', 600)
 
 TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 if not TOKEN:
@@ -324,7 +341,7 @@ def process_task(task):
                 }
 
             try:
-                stdout, stderr = process.communicate(input=task_text, timeout=600)
+                stdout, stderr = process.communicate(input=task_text, timeout=TASK_TIMEOUT)
                 
                 reply = f"✅ Task Completed\n\n[Output]:\n{stdout}"
                 if stderr:
@@ -336,7 +353,7 @@ def process_task(task):
                  except:
                      pass
                  process.communicate() # ensure it is cleaned up
-                 reply = "❌ Execution Failed: Task timed out after 600 seconds."
+                 reply = f"❌ Execution Failed: Task timed out after {TASK_TIMEOUT} seconds."
             finally:
                 with worker_lock:
                     was_stopped = False
@@ -399,7 +416,7 @@ def initialize_bot():
                 cwd=WORKSPACE_DIR,
                 capture_output=True,
                 text=True,
-                timeout=600
+                timeout=TASK_TIMEOUT
             )
             if result.returncode == 0:
                 logger.info("Bot initialization successful.")

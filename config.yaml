@@ -1,0 +1,4 @@
+# Telegram Bot Configuration
+
+# Timeout for task execution in seconds
+task_running_timeout_seconds: 600
