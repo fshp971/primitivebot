@@ -4,3 +4,4 @@ You should follow below rules:
 - Always check if the current directory is a git repository before performing any git operations.
 - When cloning a repository, always use the `$GITHUB_PAT` for authentication.
 - Commit messages should be clear and concise.
+- Your commit comment should start with the text `gemini: `.
