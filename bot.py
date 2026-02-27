@@ -169,7 +169,96 @@ def show_status(message):
                 project_name = os.path.basename(path) or "Root"
                 status_msg += f"- `{project_name}`: {q.qsize()} tasks waiting\n"
         
-        bot.send_message(message.chat.id, status_msg, parse_mode='Markdown')
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("🛑 Stop/Cancel Tasks", callback_data="stop_prompt"))
+        
+        bot.send_message(message.chat.id, status_msg, parse_mode='Markdown', reply_markup=markup)
+
+# --- Control Module: Stopping Tasks ---
+@bot.message_handler(commands=['stop', 'cancel'])
+def stop_tasks(message):
+    prompt_stop(message.chat.id)
+
+@bot.callback_query_handler(func=lambda call: call.data == 'stop_prompt')
+def handle_stop_prompt(call):
+    prompt_stop(call.message.chat.id)
+    bot.answer_callback_query(call.id)
+
+def prompt_stop(chat_id):
+    current_dir = user_project_state.get(chat_id, WORKSPACE_DIR)
+    
+    with worker_lock:
+        running = current_dir in running_tasks
+        q = project_queues.get(current_dir)
+        queued_count = q.qsize() if q else 0
+        
+        # Check if there are other active projects
+        active_dirs = set(running_tasks.keys()) | {p for p, q in project_queues.items() if not q.empty()}
+
+    if not running and queued_count == 0:
+        if not active_dirs:
+            bot.send_message(chat_id, "📭 No tasks running or queued in any project.")
+            return
+        
+        markup = InlineKeyboardMarkup()
+        for d in active_dirs:
+            project_name = os.path.basename(d) or "Root"
+            markup.add(InlineKeyboardButton(f"Stop {project_name}", callback_data=f"stop_{d}"))
+        
+        bot.send_message(chat_id, "Select a project to stop its tasks:", reply_markup=markup)
+        return
+
+    perform_stop(current_dir, chat_id)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('stop_'))
+def handle_stop_selection(call):
+    project_path = call.data.replace('stop_', '')
+    chat_id = call.message.chat.id
+    
+    perform_stop(project_path, chat_id)
+    bot.answer_callback_query(call.id, "Stop command executed")
+    # Edit the message to remove the buttons
+    bot.edit_message_text(f"🛑 Processing stop for {os.path.basename(project_path) or 'Root'}...",
+                          chat_id=chat_id, message_id=call.message.message_id)
+
+def perform_stop(project_path, chat_id):
+    project_name = os.path.basename(project_path) or "Root"
+    stopped_running = False
+    cancelled_count = 0
+
+    with worker_lock:
+        # 1. Kill running task
+        if project_path in running_tasks:
+            info = running_tasks[project_path]
+            info['stopped'] = True
+            process = info['process']
+            try:
+                os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+                stopped_running = True
+            except Exception as e:
+                logger.error(f"Failed to kill process for {project_path}: {e}")
+
+        # 2. Clear queue
+        q = project_queues.get(project_path)
+        if q:
+            while not q.empty():
+                try:
+                    q.get_nowait()
+                    q.task_done()
+                    cancelled_count += 1
+                except queue.Empty:
+                    break
+    
+    msg = f"🛑 **Stopped tasks for `{project_name}`**\n"
+    if stopped_running:
+        msg += "- Terminated the currently running task.\n"
+    if cancelled_count > 0:
+        msg += f"- Cancelled {cancelled_count} queued tasks.\n"
+    
+    if not stopped_running and cancelled_count == 0:
+        msg = f"ℹ️ No active tasks found for `{project_name}` to stop."
+
+    bot.send_message(chat_id, msg, parse_mode='Markdown')
 
 # --- Reception Module: Task Enqueuing ---
 @bot.message_handler(func=lambda message: not message.text.startswith('/'))
@@ -230,7 +319,8 @@ def process_task(task):
                 running_tasks[work_dir] = {
                     'process': process,
                     'task': task,
-                    'start_time': time.time()
+                    'start_time': time.time(),
+                    'stopped': False
                 }
 
             try:
@@ -249,8 +339,13 @@ def process_task(task):
                  reply = "❌ Execution Failed: Task timed out after 600 seconds."
             finally:
                 with worker_lock:
+                    was_stopped = False
                     if work_dir in running_tasks:
+                        was_stopped = running_tasks[work_dir].get('stopped', False)
                         del running_tasks[work_dir]
+                
+                if was_stopped:
+                    return # Skip sending the completion message if it was manually stopped
 
         except FileNotFoundError:
              reply = "❌ Execution Failed: 'gemini' not found. Please ensure it is installed and in PATH."
