@@ -62,11 +62,21 @@ except Exception as e:
     bot = None
 
 # Global state for queues and workers
-project_queues = {}  # Map: project_path -> queue.Queue
+project_queues = {}  # Map: project_path -> list of tasks
 active_workers = {}  # Map: project_path -> threading.Thread
-running_tasks = {}   # Map: project_path -> dict(process, task, start_time)
+running_tasks = {}   # Map: task_id -> dict(process, task, start_time)
+tasks_by_id = {}     # Map: task_id -> task
 worker_lock = threading.Lock()
+worker_condition = threading.Condition(worker_lock)
+task_id_counter = 1
 user_project_state = {}
+
+def next_task_id():
+    global task_id_counter
+    with worker_lock:
+        tid = task_id_counter
+        task_id_counter += 1
+        return tid
 
 WORKSPACE_DIR = os.environ.get('WORKSPACE_DIR', '/workspace')
 
@@ -83,7 +93,7 @@ def get_project_dirs():
 def get_project_queue(project_path):
     with worker_lock:
         if project_path not in project_queues:
-            project_queues[project_path] = queue.Queue()
+            project_queues[project_path] = []
         return project_queues[project_path]
 
 def ensure_worker_running(project_path):
@@ -158,7 +168,7 @@ def create_project(message):
 @bot.message_handler(commands=['status'])
 def show_status(message):
     with worker_lock:
-        active_projects = [p for p, q in project_queues.items() if not q.empty()]
+        active_projects = [p for p, q in project_queues.items() if q]
         
         if not running_tasks and not active_projects:
             bot.reply_to(message, "📭 No tasks running or queued.")
@@ -168,114 +178,80 @@ def show_status(message):
         
         if running_tasks:
             status_msg += "🏃 **Running Tasks:**\n"
-            for path, info in running_tasks.items():
-                project_name = os.path.basename(path) or "Root"
+            for tid, info in running_tasks.items():
+                project_name = os.path.basename(info['task']['cwd']) or "Root"
                 task_text = info['task']['text']
                 # Truncate task text if too long
                 task_preview = (task_text[:30] + '...') if len(task_text) > 30 else task_text
                 elapsed = int(time.time() - info['start_time'])
-                status_msg += f"- `{project_name}`: {task_preview} ({elapsed}s)\n"
+                status_msg += f"- `[{tid}]` `{project_name}`: {task_preview} ({elapsed}s)\n"
             status_msg += "\n"
 
         has_queued = False
-        for path, q in project_queues.items():
-            if not q.empty():
+        for path, q_list in project_queues.items():
+            if q_list:
                 if not has_queued:
                     status_msg += "⏳ **Queued Tasks:**\n"
                     has_queued = True
                 project_name = os.path.basename(path) or "Root"
-                status_msg += f"- `{project_name}`: {q.qsize()} tasks waiting\n"
+                status_msg += f"📂 `{project_name}`:\n"
+                for t in q_list:
+                    task_text = t['text']
+                    task_preview = (task_text[:20] + '...') if len(task_text) > 20 else task_text
+                    status_msg += f"  - `[{t['id']}]` {task_preview}\n"
         
-        markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("🛑 Stop/Cancel Tasks", callback_data="stop_prompt"))
-        
-        bot.send_message(message.chat.id, status_msg, parse_mode='Markdown', reply_markup=markup)
+        bot.send_message(message.chat.id, status_msg, parse_mode='Markdown')
 
 # --- Control Module: Stopping Tasks ---
 @bot.message_handler(commands=['stop', 'cancel'])
 def stop_tasks(message):
-    prompt_stop(message.chat.id)
-
-@bot.callback_query_handler(func=lambda call: call.data == 'stop_prompt')
-def handle_stop_prompt(call):
-    prompt_stop(call.message.chat.id)
-    bot.answer_callback_query(call.id)
-
-def prompt_stop(chat_id):
-    current_dir = user_project_state.get(chat_id, WORKSPACE_DIR)
-    
-    with worker_lock:
-        running = current_dir in running_tasks
-        q = project_queues.get(current_dir)
-        queued_count = q.qsize() if q else 0
-        
-        # Check if there are other active projects
-        active_dirs = set(running_tasks.keys()) | {p for p, q in project_queues.items() if not q.empty()}
-
-    if not running and queued_count == 0:
-        if not active_dirs:
-            bot.send_message(chat_id, "📭 No tasks running or queued in any project.")
+    try:
+        parts = message.text.split()
+        if len(parts) < 2:
+            bot.reply_to(message, "Usage: /stop {task_id}\nUse /status to see the task_id.")
             return
         
-        markup = InlineKeyboardMarkup()
-        for d in active_dirs:
-            project_name = os.path.basename(d) or "Root"
-            markup.add(InlineKeyboardButton(f"Stop {project_name}", callback_data=f"stop_{d}"))
-        
-        bot.send_message(chat_id, "Select a project to stop its tasks:", reply_markup=markup)
-        return
+        task_id = int(parts[1])
+        perform_stop_by_id(task_id, message.chat.id)
+    except ValueError:
+        bot.reply_to(message, "Invalid task ID. Please provide a numeric task_id.")
+    except Exception as e:
+        logger.error(f"Error in stop_tasks: {e}")
+        bot.reply_to(message, f"❌ Error: {e}")
 
-    perform_stop(current_dir, chat_id)
+def perform_stop_by_id(task_id, chat_id):
+    with worker_condition:
+        task = tasks_by_id.get(task_id)
+        if not task:
+            bot.send_message(chat_id, f"❌ Task `{task_id}` does not exist.")
+            return
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('stop_'))
-def handle_stop_selection(call):
-    project_path = call.data.replace('stop_', '')
-    chat_id = call.message.chat.id
-    
-    perform_stop(project_path, chat_id)
-    bot.answer_callback_query(call.id, "Stop command executed")
-    # Edit the message to remove the buttons
-    bot.edit_message_text(f"🛑 Processing stop for {os.path.basename(project_path) or 'Root'}...",
-                          chat_id=chat_id, message_id=call.message.message_id)
-
-def perform_stop(project_path, chat_id):
-    project_name = os.path.basename(project_path) or "Root"
-    stopped_running = False
-    cancelled_count = 0
-
-    with worker_lock:
-        # 1. Kill running task
-        if project_path in running_tasks:
-            info = running_tasks[project_path]
+        # 1. Check if it's a running task
+        if task_id in running_tasks:
+            info = running_tasks[task_id]
             info['stopped'] = True
             process = info['process']
             try:
+                # Kill the process group
                 os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-                stopped_running = True
+                bot.send_message(chat_id, f"🛑 Terminated running task `{task_id}`.")
             except Exception as e:
-                logger.error(f"Failed to kill process for {project_path}: {e}")
+                logger.error(f"Failed to kill process for task {task_id}: {e}")
+                bot.send_message(chat_id, f"❌ Failed to terminate task `{task_id}`: {e}")
+            return
 
-        # 2. Clear queue
-        q = project_queues.get(project_path)
-        if q:
-            while not q.empty():
-                try:
-                    q.get_nowait()
-                    q.task_done()
-                    cancelled_count += 1
-                except queue.Empty:
-                    break
-    
-    msg = f"🛑 **Stopped tasks for `{project_name}`**\n"
-    if stopped_running:
-        msg += "- Terminated the currently running task.\n"
-    if cancelled_count > 0:
-        msg += f"- Cancelled {cancelled_count} queued tasks.\n"
-    
-    if not stopped_running and cancelled_count == 0:
-        msg = f"ℹ️ No active tasks found for `{project_name}` to stop."
+        # 2. Check if it's a queuing task
+        for project_path, q_list in project_queues.items():
+            for i, t in enumerate(q_list):
+                if t['id'] == task_id:
+                    q_list.pop(i)
+                    task['status'] = 'cancelled'
+                    bot.send_message(chat_id, f"🛑 Removed task `{task_id}` from the queue.")
+                    return
 
-    bot.send_message(chat_id, msg, parse_mode='Markdown')
+        # 3. If it reached here, it's neither running nor queuing
+        status = task.get('status', 'unknown')
+        bot.send_message(chat_id, f"ℹ️ Task `{task_id}` is not currently running or queued (Status: {status}).")
 
 # --- Reception Module: Task Enqueuing ---
 @bot.message_handler(func=lambda message: not message.text.startswith('/'))
@@ -283,19 +259,26 @@ def handle_task(message):
     chat_id = message.chat.id
     current_dir = user_project_state.get(chat_id, WORKSPACE_DIR)
     
-    # Get the queue for this specific project folder
-    q = get_project_queue(current_dir)
-    
+    tid = next_task_id()
     task = {
+        'id': tid,
         'chat_id': chat_id,
         'text': message.text,
-        'cwd': current_dir
+        'cwd': current_dir,
+        'status': 'queued'
     }
-    q.put(task)
+
+    with worker_condition:
+        if current_dir not in project_queues:
+            project_queues[current_dir] = []
+        project_queues[current_dir].append(task)
+        tasks_by_id[tid] = task
+        q_size = len(project_queues[current_dir])
+        worker_condition.notify_all()
     
     ensure_worker_running(current_dir)
 
-    bot.reply_to(message, f"📝 Task queued for {os.path.basename(current_dir)}\n{q.qsize() - 1} tasks ahead in this folder.")
+    bot.reply_to(message, f"📝 Task queued (ID: {tid}) for {os.path.basename(current_dir)}\n{q_size - 1} tasks ahead in this folder.")
 
 # --- Execution Module: Background Consumption & Gemini Call ---
 def process_task(task):
@@ -333,7 +316,7 @@ def process_task(task):
             )
 
             with worker_lock:
-                running_tasks[work_dir] = {
+                running_tasks[task['id']] = {
                     'process': process,
                     'task': task,
                     'start_time': time.time(),
@@ -343,7 +326,7 @@ def process_task(task):
             try:
                 stdout, stderr = process.communicate(input=task_text, timeout=TASK_TIMEOUT)
                 
-                reply = f"✅ Task Completed\n\n[Output]:\n{stdout}"
+                reply = f"✅ Task Completed (ID: {task['id']})\n\n[Output]:\n{stdout}"
                 if stderr:
                     reply += f"\n\n[Error/Warning]:\n{stderr}"
             except subprocess.TimeoutExpired:
@@ -353,13 +336,14 @@ def process_task(task):
                  except:
                      pass
                  process.communicate() # ensure it is cleaned up
-                 reply = f"❌ Execution Failed: Task timed out after {TASK_TIMEOUT} seconds."
+                 reply = f"❌ Execution Failed: Task `{task['id']}` timed out after {TASK_TIMEOUT} seconds."
             finally:
                 with worker_lock:
                     was_stopped = False
-                    if work_dir in running_tasks:
-                        was_stopped = running_tasks[work_dir].get('stopped', False)
-                        del running_tasks[work_dir]
+                    if task['id'] in running_tasks:
+                        was_stopped = running_tasks[task['id']].get('stopped', False)
+                        del running_tasks[task['id']]
+                    task['status'] = 'completed' if not was_stopped else 'stopped'
                 
                 if was_stopped:
                     return # Skip sending the completion message if it was manually stopped
@@ -384,26 +368,23 @@ def process_task(task):
                 pass
 
 def project_worker(project_path):
-    q = get_project_queue(project_path)
-
     while True:
-        try:
-            # Wait for a task, timeout to let the thread die if idle (e.g. 5 mins) 
-            task = q.get(timeout=300) 
-        except queue.Empty:
-            # Check if we should exit
-            with worker_lock:
-                if q.empty():
+        task = None
+        with worker_condition:
+            while project_path not in project_queues or not project_queues[project_path]:
+                # Wait for a task, timeout to let the thread die if idle (e.g. 5 mins)
+                if not worker_condition.wait(timeout=300):
+                    # Check if we should exit
                     if project_path in active_workers:
                         del active_workers[project_path]
                     logger.info(f"Stopping worker for {project_path} (idle)")
                     return
-            continue
+            
+            task = project_queues[project_path].pop(0)
+            task['status'] = 'running'
 
-        try:
+        if task:
             process_task(task)
-        finally:
-            q.task_done()
 
 def initialize_bot():
     """Performs initialization using gemini-cli and INIT.md if it exists."""

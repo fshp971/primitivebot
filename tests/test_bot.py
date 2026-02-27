@@ -119,12 +119,13 @@ class TestGeminiBot(unittest.TestCase):
 
         # Check if task is in the correct queue
         q = bot.get_project_queue(bot.WORKSPACE_DIR)
-        self.assertEqual(q.qsize(), 1)
+        self.assertEqual(len(q), 1)
 
-        task = q.get()
+        task = q[0]
         self.assertEqual(task['chat_id'], 123)
         self.assertEqual(task['text'], "Do something")
         self.assertEqual(task['cwd'], bot.WORKSPACE_DIR) # Default dir
+        self.assertIn('id', task)
 
         mock_ensure_worker.assert_called_with(bot.WORKSPACE_DIR)
 
@@ -134,6 +135,7 @@ class TestGeminiBot(unittest.TestCase):
     def test_process_task(self, mock_isfile, mock_exists, mock_popen):
         # Setup task
         task = {
+            'id': 1,
             'chat_id': 123,
             'text': 'Run this',
             'cwd': '/tmp/test_workspace/project1'
@@ -170,6 +172,7 @@ class TestGeminiBot(unittest.TestCase):
     def test_process_task_with_agent_md(self, mock_file, mock_isfile, mock_exists, mock_popen):
         # Setup task
         task = {
+            'id': 2,
             'chat_id': 123,
             'text': 'Fix bug',
             'cwd': '/tmp/test_workspace/project1'
@@ -252,14 +255,14 @@ class TestGeminiBot(unittest.TestCase):
 
     def test_show_status_active(self):
         # Mock a running task
-        bot.running_tasks['/tmp/test_workspace/project1'] = {
-            'task': {'text': 'Running Task'},
+        bot.running_tasks[1] = {
+            'task': {'id': 1, 'text': 'Running Task', 'cwd': '/tmp/test_workspace/project1'},
             'start_time': time.time()
         }
         
         # Mock a queued task
         q = bot.get_project_queue('/tmp/test_workspace/project2')
-        q.put({'text': 'Queued Task'})
+        q.append({'id': 2, 'text': 'Queued Task', 'cwd': '/tmp/test_workspace/project2'})
         
         message = MagicMock()
         bot.show_status(message)
@@ -268,6 +271,8 @@ class TestGeminiBot(unittest.TestCase):
         args, kwargs = bot.bot.send_message.call_args
         self.assertIn("Running Tasks", args[1])
         self.assertIn("Queued Tasks", args[1])
+        self.assertIn("[1]", args[1])
+        self.assertIn("[2]", args[1])
         self.assertIn("project1", args[1])
         self.assertIn("project2", args[1])
 
