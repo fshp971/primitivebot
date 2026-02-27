@@ -2,3 +2,6 @@
 
 # Timeout for task execution in seconds
 task_running_timeout_seconds: 600
+
+# Length of description text to display in /status
+status_description_length: 30

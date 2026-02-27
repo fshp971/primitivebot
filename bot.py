@@ -49,6 +49,7 @@ else:
 
 # Default parameters
 TASK_TIMEOUT = config.get('task_running_timeout_seconds', 600)
+STATUS_DESC_LENGTH = config.get('status_description_length', 30)
 
 TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 if not TOKEN:
@@ -182,7 +183,7 @@ def show_status(message):
                 project_name = os.path.basename(info['task']['cwd']) or "Root"
                 task_text = info['task']['text']
                 # Truncate task text if too long
-                task_preview = (task_text[:30] + '...') if len(task_text) > 30 else task_text
+                task_preview = (task_text[:STATUS_DESC_LENGTH] + '...') if len(task_text) > STATUS_DESC_LENGTH else task_text
                 elapsed = int(time.time() - info['start_time'])
                 status_msg += f"- `[{tid}]` `{project_name}`: {task_preview} ({elapsed}s)\n"
             status_msg += "\n"
@@ -197,7 +198,7 @@ def show_status(message):
                 status_msg += f"📂 `{project_name}`:\n"
                 for t in q_list:
                     task_text = t['text']
-                    task_preview = (task_text[:20] + '...') if len(task_text) > 20 else task_text
+                    task_preview = (task_text[:STATUS_DESC_LENGTH] + '...') if len(task_text) > STATUS_DESC_LENGTH else task_text
                     status_msg += f"  - `[{t['id']}]` {task_preview}\n"
         
         bot.send_message(message.chat.id, status_msg, parse_mode='Markdown')
