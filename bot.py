@@ -25,6 +25,52 @@ from dotenv import load_dotenv
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
+
+# Load environment variables
+load_dotenv()
+
+# Configure logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# Load configuration from YAML file
+CONFIG_FILE = os.environ.get("BOT_CONFIG", None)
+if not CONFIG_FILE:
+    CONFIG_FILE = args.config
+
+config = {}
+if os.path.exists(CONFIG_FILE):
+    try:
+        with open(CONFIG_FILE, 'r') as f:
+            config = yaml.safe_load(f) or {}
+            logger.info(f"Loaded configuration from {CONFIG_FILE}")
+    except Exception as e:
+        logger.error(f"Error loading {CONFIG_FILE}: {e}")
+else:
+    logger.info(f"No configuration file found at {CONFIG_FILE}. Using defaults.")
+
+# Default parameters
+TASK_TIMEOUT = config.get('task_timeout_second', 600)
+STATUS_DESC_LENGTH = config.get('status_desc_length', 30)
+MODEL_VERSION = config.get('model_version', "auto")
+
+TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
+if not TOKEN:
+    logger.warning("TELEGRAM_BOT_TOKEN not set. Bot will fail to start.")
+
+# Initialize bot
+try:
+    bot = telebot.TeleBot(TOKEN)
+except Exception as e:
+    logger.error(f"Failed to initialize bot: {e}")
+    bot = None
+
+# ================ finish initialization ================
+
+
 # Global state for queues and workers
 project_queues = {}  # Map: project_path -> list of tasks
 active_workers = {}  # Map: project_path -> threading.Thread
@@ -270,7 +316,7 @@ def process_task(task):
         try:
             # We use Popen to allow tracking and future termination
             process = subprocess.Popen(
-                ['gemini', '--yolo', '--prompt', '-'],
+                ['gemini', '--yolo', '-m', MODEL_VERSION, '--prompt', '-'],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -357,7 +403,7 @@ def initialize_bot():
         logger.info(f"Initializing bot with {init_file}...")
         try:
             result = subprocess.run(
-                ['gemini', '--yolo', '--prompt', f"Initialize according to @{init_file}"],
+                ['gemini', '--yolo', '-m', MODEL_VERSION, '--prompt', f"Initialize according to @{init_file}"],
                 cwd=WORKSPACE_DIR,
                 capture_output=True,
                 text=True,
@@ -377,52 +423,8 @@ def initialize_bot():
         logger.info(f"No initialization file found at {init_file}. Skipping initialization.")
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, default=None)
-
-    # Load environment variables
-    load_dotenv()
-
-    # Configure logging
-    logging.basicConfig(
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        level=logging.INFO
-    )
-    logger = logging.getLogger(__name__)
-
-    # Load configuration from YAML file
-    CONFIG_FILE = os.environ.get("BOT_CONFIG", None)
-    if not CONFIG_FILE:
-        CONFIG_FILE = args.config
-
-    config = {}
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, 'r') as f:
-                config = yaml.safe_load(f) or {}
-                logger.info(f"Loaded configuration from {CONFIG_FILE}")
-        except Exception as e:
-            logger.error(f"Error loading {CONFIG_FILE}: {e}")
-    else:
-        logger.info(f"No configuration file found at {CONFIG_FILE}. Using defaults.")
-
-    # Default parameters
-    TASK_TIMEOUT = config.get('task_timeout_second', 600)
-    STATUS_DESC_LENGTH = config.get('status_desc_length', 30)
-    MODEL_VERSION = config.get('model_version', "auto")
-
-    TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
-    if not TOKEN:
-        logger.warning("TELEGRAM_BOT_TOKEN not set. Bot will fail to start.")
-
-    # Initialize bot
-    try:
-        bot = telebot.TeleBot(TOKEN)
-    except Exception as e:
-        logger.error(f"Failed to initialize bot: {e}")
-        bot = None
-
-    # ================ finish initialization ================
+    # parser = argparse.ArgumentParser()
+    # parser.add_argument("--config", type=str, default=None)
 
     if bot:
         logger.info("🤖 Bot Daemon Starting...")
