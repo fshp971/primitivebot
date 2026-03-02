@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import argparse
 import os
 import subprocess
 import threading
@@ -23,44 +24,6 @@ import yaml
 from dotenv import load_dotenv
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-
-# Load environment variables
-load_dotenv()
-
-# Configure logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
-
-# Load configuration from YAML file
-CONFIG_FILE = os.path.join(os.path.dirname(__file__), 'config.yaml')
-config = {}
-if os.path.exists(CONFIG_FILE):
-    try:
-        with open(CONFIG_FILE, 'r') as f:
-            config = yaml.safe_load(f) or {}
-            logger.info(f"Loaded configuration from {CONFIG_FILE}")
-    except Exception as e:
-        logger.error(f"Error loading {CONFIG_FILE}: {e}")
-else:
-    logger.info(f"No configuration file found at {CONFIG_FILE}. Using defaults.")
-
-# Default parameters
-TASK_TIMEOUT = config.get('task_running_timeout_seconds', 600)
-STATUS_DESC_LENGTH = config.get('status_description_length', 30)
-
-TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
-if not TOKEN:
-    logger.warning("TELEGRAM_BOT_TOKEN not set. Bot will fail to start.")
-
-# Initialize bot
-try:
-    bot = telebot.TeleBot(TOKEN)
-except Exception as e:
-    logger.error(f"Failed to initialize bot: {e}")
-    bot = None
 
 # Global state for queues and workers
 project_queues = {}  # Map: project_path -> list of tasks
@@ -414,6 +377,53 @@ def initialize_bot():
         logger.info(f"No initialization file found at {init_file}. Skipping initialization.")
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=str, default=None)
+
+    # Load environment variables
+    load_dotenv()
+
+    # Configure logging
+    logging.basicConfig(
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        level=logging.INFO
+    )
+    logger = logging.getLogger(__name__)
+
+    # Load configuration from YAML file
+    CONFIG_FILE = os.environ.get("BOT_CONFIG", None)
+    if not CONFIG_FILE:
+        CONFIG_FILE = args.config
+
+    config = {}
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, 'r') as f:
+                config = yaml.safe_load(f) or {}
+                logger.info(f"Loaded configuration from {CONFIG_FILE}")
+        except Exception as e:
+            logger.error(f"Error loading {CONFIG_FILE}: {e}")
+    else:
+        logger.info(f"No configuration file found at {CONFIG_FILE}. Using defaults.")
+
+    # Default parameters
+    TASK_TIMEOUT = config.get('task_timeout_second', 600)
+    STATUS_DESC_LENGTH = config.get('status_desc_length', 30)
+    MODEL_VERSION = config.get('model_version', "auto")
+
+    TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
+    if not TOKEN:
+        logger.warning("TELEGRAM_BOT_TOKEN not set. Bot will fail to start.")
+
+    # Initialize bot
+    try:
+        bot = telebot.TeleBot(TOKEN)
+    except Exception as e:
+        logger.error(f"Failed to initialize bot: {e}")
+        bot = None
+
+    # ================ finish initialization ================
+
     if bot:
         logger.info("🤖 Bot Daemon Starting...")
         initialize_bot()

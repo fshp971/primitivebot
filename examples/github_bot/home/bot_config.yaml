@@ -6,4 +6,4 @@ task_timeout_second: 600
 # Length of description text to display in /status
 status_desc_length: 30
 
-model_version: auto
+model_version: auto-gemini-2.5
