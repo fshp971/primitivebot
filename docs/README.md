@@ -23,6 +23,7 @@ The system is built using Python and uses the `pyTelegramBotAPI` for Telegram co
 - **Task Dispatcher**: Receives messages and routes them to the appropriate project queue.
 - **Worker Threads**: Each project has its own dedicated worker thread to ensure sequential execution within a project but parallel execution across different projects.
 - **Gemini CLI Integration**: Tasks are executed by calling the `gemini` command in the project's directory.
+- **Agentic Paper Writing Loop**: A specialized workflow for iterative paper drafting and peer review. See [Paper Writing Loop Design](paper_writing_loop.md) for details.
 
 ## Concurrency Model
 PrimitiveBot implements a **Per-Project Concurrency** model:
