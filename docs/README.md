@@ -16,13 +16,14 @@ PrimitiveBot is a Telegram Bot that acts as an interface for `gemini-cli`. It al
 PrimitiveBot enables developers to interact with their codebases through a Telegram interface. By bridging the gap between a chat platform and the `gemini-cli`, it allows for remote code editing, refactoring, and general AI assistance on any project hosted within its workspace.
 
 ## Design & Architecture
-The system is built using Python and uses the `pyTelegramBotAPI` for Telegram communication. It interacts with the local filesystem and the `gemini-cli` binary.
+The system is built using Python and is organized into a modular structure under `src/primitivebot`. It uses the `pyTelegramBotAPI` for Telegram communication and an agnostic AI CLI tool interface for executing tasks.
 
 ### Key Components:
-- **Telegram Interface**: Handles incoming commands (`/start`, `/cd`, `/status`, `/create`, `/stop`) and text messages for tasks.
-- **Task Dispatcher**: Receives messages and routes them to the appropriate project queue.
-- **Worker Threads**: Each project has its own dedicated worker thread to ensure sequential execution within a project but parallel execution across different projects.
-- **Gemini CLI Integration**: Tasks are executed by calling the `gemini` command in the project's directory.
+- **TelegramBot**: A class that encapsulates the Telegram interface, task dispatching, and worker thread management. It is initialized with configuration parameters and an AI tool calling class.
+- **AICLITool**: A model-agnostic class that handles calling the underlying AI CLI tool (e.g., `gemini-cli`). It abstracts the command-line arguments and execution logic.
+- **Task Dispatcher**: Receives messages and routes them to the appropriate project queue within the `TelegramBot` class.
+- **Worker Threads**: Each project has its own dedicated worker thread managed by the `TelegramBot` to ensure sequential execution within a project but parallel execution across different projects.
+- **Gemini CLI Integration**: Tasks are executed by calling the `gemini` command through the `AICLITool` interface.
 - **Agentic Paper Writing Loop**: A specialized workflow for iterative paper drafting and peer review. See [Paper Writing Loop Design](paper_writing_loop.md) for details.
 
 ## Concurrency Model
