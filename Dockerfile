@@ -27,7 +27,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY bot.py .
+COPY src/ ./src/
 
 # Create the workspace directory (mount point)
 RUN mkdir /workspace
@@ -36,4 +36,4 @@ RUN mkdir /workspace
 ENV WORKSPACE_DIR=/workspace
 
 # Command to run the bot
-CMD ["python", "bot.py"]
+CMD ["python", "src/bot.py"]

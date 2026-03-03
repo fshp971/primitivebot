@@ -40,6 +40,8 @@ mock_telebot.TeleBot.return_value.callback_query_handler.side_effect = identity_
 sys.modules['telebot'] = mock_telebot
 sys.modules['telebot.types'] = mock_telebot.types
 
+# Add src to path for bot import
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 import bot
 
 class TestGeminiBot(unittest.TestCase):

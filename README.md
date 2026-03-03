@@ -26,7 +26,10 @@ this is simple app for primitives to operate gemini-cli through telegram. It imp
 
 ```text
 /
-├── bot.py                  # Main application logic
+├── src/                    # Application source code
+│   ├── bot.py              # Main application logic
+│   └── config.yaml         # Bot configuration
+├── docs/                   # Documentation
 ├── Dockerfile              # Container definition
 ├── requirements.txt        # Python dependencies
 ├── README.md               # Documentation
