@@ -8,6 +8,7 @@ from typing import Dict, List, Optional, Any
 from telebot.async_telebot import AsyncTeleBot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from primitivebot.ai.cli import AICLITool
+from primitivebot.bot.paper_loop import PaperWritingLoop
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,8 @@ class TelegramBot:
         self.worker_lock = asyncio.Lock()
         self.task_id_counter = 1
         self.user_project_state: Dict[int, str] = {}
+        self.paper_loop = PaperWritingLoop(self.ai_tool, self.params.workspace_dir)
+        self.last_zip_paths: Dict[int, str] = {}
 
         # Register handlers
         self._register_handlers()
@@ -60,6 +63,22 @@ class TelegramBot:
         @self.bot.message_handler(commands=['stop', 'cancel'])
         async def stop_tasks_handler(message):
             await self.stop_tasks(message)
+
+        @self.bot.message_handler(commands=['clean'])
+        async def clean_task_handler(message):
+            await self.clean_task(message)
+
+        @self.bot.message_handler(commands=['clean_all_papers'])
+        async def clean_all_papers_handler(message):
+            await self.clean_all_papers(message)
+
+        @self.bot.message_handler(commands=['write_paper'])
+        async def write_paper_handler(message):
+            await self.write_paper(message)
+
+        @self.bot.message_handler(content_types=['document'])
+        async def handle_document_handler(message):
+            await self.handle_document(message)
 
         @self.bot.message_handler(func=lambda message: not message.text.startswith('/'))
         async def handle_task_handler(message):
@@ -213,6 +232,106 @@ class TelegramBot:
 
             status = task.get('status', 'unknown')
             await self.bot.send_message(chat_id, f"ℹ️ Task `{task_id}` is not currently queued (Status: {status}).")
+
+    async def clean_task(self, message):
+        try:
+            parts = message.text.split()
+            if len(parts) < 2:
+                await self.bot.reply_to(message, "Usage: /clean <task_id>")
+                return
+
+            task_id = parts[1]
+            project_dir = os.path.join(self.paper_loop.tasks_dir, task_id)
+            if os.path.exists(project_dir):
+                import shutil
+                shutil.rmtree(project_dir)
+                await self.bot.reply_to(message, f"✅ Cleaned task {task_id}")
+            else:
+                await self.bot.reply_to(message, f"❌ Task {task_id} not found.")
+        except Exception as e:
+            logger.error(f"Error in clean_task: {e}")
+            await self.bot.reply_to(message, f"❌ Failed to clean task: {e}")
+
+    async def clean_all_papers(self, message):
+        try:
+            import shutil
+            if os.path.exists(self.paper_loop.tasks_dir):
+                for item in os.listdir(self.paper_loop.tasks_dir):
+                    item_path = os.path.join(self.paper_loop.tasks_dir, item)
+                    if os.path.isdir(item_path):
+                        shutil.rmtree(item_path)
+                    else:
+                        os.remove(item_path)
+                await self.bot.reply_to(message, "✅ Cleaned all paper tasks.")
+            else:
+                await self.bot.reply_to(message, "📁 No paper tasks directory found.")
+        except Exception as e:
+            logger.error(f"Error in clean_all_papers: {e}")
+            await self.bot.reply_to(message, f"❌ Failed to clean all paper tasks: {e}")
+
+    async def handle_document(self, message):
+        chat_id = message.chat.id
+        if not message.document.file_name.endswith('.zip'):
+            await self.bot.reply_to(message, "⚠️ Please upload a .zip file for the paper writing task.")
+            return
+
+        try:
+            file_info = await self.bot.get_file(message.document.file_id)
+            downloaded_file = await self.bot.download_file(file_info.file_path)
+
+            temp_zip_path = os.path.join(self.params.workspace_dir, f"paper_input_{chat_id}.zip")
+            with open(temp_zip_path, 'wb') as new_file:
+                new_file.write(downloaded_file)
+
+            self.last_zip_paths[chat_id] = temp_zip_path
+            await self.bot.reply_to(message, "✅ Zip file received. Use `/write_paper <rounds_n>` to start the loop.")
+        except Exception as e:
+            logger.error(f"Error handling document: {e}")
+            await self.bot.reply_to(message, f"❌ Failed to receive file: {e}")
+
+    async def write_paper(self, message):
+        chat_id = message.chat.id
+        zip_path = self.last_zip_paths.get(chat_id)
+        if not zip_path or not os.path.exists(zip_path):
+            await self.bot.reply_to(message, "⚠️ No zip file found. Please upload a .zip file first.")
+            return
+
+        parts = message.text.split()
+        if len(parts) < 2:
+            rounds_n = 3 # Default
+        else:
+            try:
+                rounds_n = int(parts[1])
+            except ValueError:
+                await self.bot.reply_to(message, "Usage: /write_paper <rounds_n>")
+                return
+
+        tid = await self.next_task_id()
+        task_id = f"paper_task_{tid}"
+
+        # We run this as a task in the background
+        asyncio.create_task(self.run_paper_loop_task(chat_id, task_id, zip_path, rounds_n))
+        await self.bot.reply_to(message, f"🚀 Started Paper Writing Loop (ID: {task_id}) for {rounds_n} rounds.")
+
+    async def run_paper_loop_task(self, chat_id, task_id, zip_path, rounds_n):
+        async def status_update(msg):
+            await self.bot.send_message(chat_id, msg)
+
+        try:
+            final_zip_path = await self.paper_loop.run(task_id, zip_path, rounds_n, status_update)
+
+            with open(final_zip_path, 'rb') as f:
+                await self.bot.send_document(chat_id, f, caption=f"🏁 Paper writing task {task_id} completed!")
+
+            # Cleanup temp zip
+            if os.path.exists(zip_path):
+                os.remove(zip_path)
+            if chat_id in self.last_zip_paths:
+                del self.last_zip_paths[chat_id]
+
+        except Exception as e:
+            logger.error(f"Error in run_paper_loop_task: {e}")
+            await self.bot.send_message(chat_id, f"❌ Paper loop failed: {e}")
 
     async def handle_task(self, message):
         chat_id = message.chat.id
