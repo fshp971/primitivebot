@@ -19,20 +19,20 @@ PrimitiveBot enables developers to interact with their codebases through a Teleg
 The system is built using Python and is organized into a modular structure under `src/primitivebot`. It uses the `pyTelegramBotAPI` for Telegram communication and an agnostic AI CLI tool interface for executing tasks.
 
 ### Key Components:
-- **TelegramBot**: A class that encapsulates the Telegram interface, task dispatching, and worker thread management. It is initialized with configuration parameters and an AI tool calling class.
-- **AICLITool**: A model-agnostic class that handles calling the underlying AI CLI tool (e.g., `gemini-cli`). It abstracts the command-line arguments and execution logic.
+- **TelegramBot**: A class that encapsulates the Telegram interface, task dispatching, and worker task management using `asyncio`. It is initialized with configuration parameters and an AI tool calling class.
+- **AICLITool**: A model-agnostic class that handles calling the underlying AI CLI tool (e.g., `gemini-cli`) asynchronously. It abstracts the command-line arguments and execution logic.
 - **Task Dispatcher**: Receives messages and routes them to the appropriate project queue within the `TelegramBot` class.
-- **Worker Threads**: Each project has its own dedicated worker thread managed by the `TelegramBot` to ensure sequential execution within a project but parallel execution across different projects.
+- **Worker Tasks**: Each project has its own dedicated worker task managed by the `TelegramBot` using `asyncio.create_task` and `asyncio.Queue` to ensure sequential execution within a project but parallel execution across different projects.
 - **Gemini CLI Integration**: Tasks are executed by calling the `gemini` command through the `AICLITool` interface.
 - **Agentic Paper Writing Loop**: A specialized workflow for iterative paper drafting and peer review. See [Paper Writing Loop Design](paper_writing_loop.md) for details.
 
 ## Concurrency Model
-PrimitiveBot implements a **Per-Project Concurrency** model:
+PrimitiveBot implements a **Per-Project Concurrency** model using `asyncio`:
 
 1. **Isolation**: Every project directory in the `/workspace` is treated as an independent execution unit.
-2. **Worker threads**: When a task is received for a project, a dedicated worker thread is spawned (if not already running) for that project.
-3. **Queues**: Each project has its own task queue. Tasks for the same project are executed one-by-one to prevent race conditions (e.g., two AI tasks trying to edit the same file simultaneously).
-4. **Parallelism**: Multiple worker threads can run tasks for different projects at the same time.
+2. **Worker tasks**: When a task is received for a project, a dedicated worker task is created (if not already running) for that project.
+3. **Queues**: Each project has its own `asyncio.Queue`. Tasks for the same project are executed one-by-one to prevent race conditions (e.g., two AI tasks trying to edit the same file simultaneously).
+4. **Parallelism**: Multiple worker tasks can run concurrently for different projects using the `asyncio` event loop.
 
 ## Usage Guide
 
@@ -60,8 +60,8 @@ To reproduce the functionality of this repository, an AI coding tool should foll
 
 2. **Core Logic Implementation**:
    - Implement a mechanism to track the "current project" for each user.
-   - Create a mapping of project paths to `threading.Thread` and task queues.
-   - Ensure that `subprocess.Popen` is used with `os.setsid` to allow for process group termination.
+   - Create a mapping of project paths to `asyncio.Queue` and `asyncio.Task`.
+   - Ensure that `asyncio.create_subprocess_exec` is used with `os.setsid` to allow for process group termination.
    - Implement `AGENT.md` and `INIT.md` handling for context and initialization.
 
 3. **Safety & Security**:

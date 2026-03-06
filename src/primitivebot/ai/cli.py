@@ -1,9 +1,9 @@
-from dataclasses import dataclass, field
-from typing import List, Optional
-import subprocess
+import asyncio
 import os
 import signal
 import logging
+from dataclasses import dataclass, field
+from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -18,47 +18,46 @@ class AICLIToolParams:
 
 class AICLITool:
     """A model/tool agnostic AI CLI tool calling class."""
-    
+
     def __init__(self, params: AICLIToolParams):
         self.params = params
 
-    def call(self, prompt: str, cwd: str) -> tuple[str, str, int]:
+    async def call(self, prompt: str, cwd: str) -> tuple[str, str, int]:
         """
         Feeds the prompt into the calling function, gets and returns the response.
         Returns: (stdout, stderr, return_code)
         """
         # Construct the full command
         full_command = list(self.params.command)
-        if self.params.model_version and "-m" in full_command:
-            # If -m is in the template, we might want to replace it or ensure it's set
-            # For simplicity, if we see 'MODEL_VERSION' placeholder, replace it.
-            # However, the user said "store all necessary command and arguments" in the class.
-            pass
-        
-        # Example for gemini-cli: ['gemini', '--yolo', '-m', self.params.model_version, '--prompt', '-']
-        # Let's assume the params.command is a template or already has what's needed.
-        
+
         try:
-            process = subprocess.Popen(
-                full_command,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+            process = await asyncio.create_subprocess_exec(
+                *full_command,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
-                text=True,
                 preexec_fn=os.setsid  # To allow killing the whole process group
             )
 
             try:
-                stdout, stderr = process.communicate(input=prompt, timeout=self.params.timeout)
-                return stdout, stderr, process.returncode
-            except subprocess.TimeoutExpired:
+                stdout_data, stderr_data = await asyncio.wait_for(
+                    process.communicate(input=prompt.encode()),
+                    timeout=self.params.timeout
+                )
+                return stdout_data.decode(), stderr_data.decode(), process.returncode
+            except asyncio.TimeoutError:
                 # Kill the whole process group
                 try:
                     os.killpg(os.getpgid(process.pid), signal.SIGTERM)
                 except Exception as e:
                     logger.error(f"Failed to kill process group: {e}")
-                process.communicate() # cleanup
+
+                # Try to cleanup, but don't wait forever
+                try:
+                    await asyncio.wait_for(process.communicate(), timeout=5)
+                except:
+                    pass
                 return "", f"Timeout after {self.params.timeout} seconds", -1
             except Exception as e:
                 logger.error(f"Error during process communication: {e}")

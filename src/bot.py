@@ -2,6 +2,7 @@ import os
 import yaml
 import logging
 import argparse
+import asyncio
 from dotenv import load_dotenv
 from primitivebot.ai.cli import AICLITool, AICLIToolParams
 from primitivebot.bot.telegram import TelegramBot, TelegramBotParams
@@ -16,7 +17,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def main():
+async def main():
     parser = argparse.ArgumentParser(description="PrimitiveBot Telegram Bot")
     parser.add_argument("--config", type=str, default=os.environ.get("BOT_CONFIG", "src/config.yaml"), help="Path to config file")
     args = parser.parse_args()
@@ -64,7 +65,7 @@ def main():
     telegram_bot = TelegramBot(bot_params, ai_tool)
 
     # Start Bot
-    telegram_bot.start()
+    await telegram_bot.start()
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(main())
