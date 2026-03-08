@@ -7,3 +7,7 @@ task_timeout_second: 600
 status_desc_length: 30
 
 model_version: auto
+
+# Whitelist for Telegram user unique IDs (integers)
+# If empty, all users are allowed to use the bot
+whitelist: []

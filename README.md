@@ -78,6 +78,11 @@ You can control your bot's behavior by placing two special files in the `home/` 
 
 -   **`AGENT.md`**: These instructions are prepended to *every* task sent to the bot. Use it to define coding styles, security rules (like "never commit secrets"), or specific tool usage preferences.
 -   **`INIT.md`**: This file is executed *once* when the bot starts up. Use it to configure global settings like `git config`, install common tools, or verify environment variables.
+-   **`config.yaml`**: You can also provide a `config.yaml` file to configure the bot.
+    -   `task_timeout_second`: Timeout for task execution in seconds (default: 600).
+    -   `status_desc_length`: Length of description text to display in `/status` (default: 30).
+    -   `model_version`: The model version to use for `gemini-cli` (default: "auto").
+    -   `whitelist`: A list of Telegram user unique IDs (integers) allowed to use the bot. If empty, all users are allowed.
 
 ### 5. Using Examples
 

@@ -79,4 +79,5 @@ Example `config.yaml`:
 task_timeout_second: 600
 status_desc_length: 30
 model_version: "auto"
+whitelist: []
 ```

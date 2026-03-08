@@ -39,6 +39,7 @@ async def main():
     TASK_TIMEOUT = config.get('task_timeout_second', 600)
     STATUS_DESC_LENGTH = config.get('status_desc_length', 30)
     MODEL_VERSION = config.get('model_version', "auto")
+    WHITELIST = config.get('whitelist', [])
     TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 
     if not TOKEN:
@@ -60,7 +61,8 @@ async def main():
         token=TOKEN,
         workspace_dir=WORKSPACE_DIR,
         task_timeout_second=TASK_TIMEOUT,
-        status_desc_length=STATUS_DESC_LENGTH
+        status_desc_length=STATUS_DESC_LENGTH,
+        whitelist=WHITELIST
     )
     telegram_bot = TelegramBot(bot_params, ai_tool)
 

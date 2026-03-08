@@ -19,6 +19,7 @@ class TelegramBotParams:
     workspace_dir: str = '/workspace'
     task_timeout_second: int = 600
     status_desc_length: int = 30
+    whitelist: List[int] = field(default_factory=list)
     # any other IM specific parameters
 
 class TelegramBot:
@@ -43,7 +44,22 @@ class TelegramBot:
         # Register handlers
         self._register_handlers()
 
+    def _is_allowed(self, user_id: int) -> bool:
+        if not self.params.whitelist:
+            return True
+        return user_id in self.params.whitelist
+
     def _register_handlers(self):
+        @self.bot.message_handler(func=lambda message: not self._is_allowed(message.from_user.id))
+        async def unauthorized_message_handler(message):
+            logger.warning(f"Unauthorized access attempt by user {message.from_user.id} ({message.from_user.username})")
+            await self.bot.reply_to(message, "🚫 You are not authorized to use this bot.")
+
+        @self.bot.callback_query_handler(func=lambda call: not self._is_allowed(call.from_user.id))
+        async def unauthorized_callback_handler(call):
+            logger.warning(f"Unauthorized callback attempt by user {call.from_user.id} ({call.from_user.username})")
+            await self.bot.answer_callback_query(call.id, "🚫 Unauthorized", show_alert=True)
+
         @self.bot.message_handler(commands=['cd', 'projects', 'start'])
         async def list_projects_handler(message):
             await self.list_projects(message)
