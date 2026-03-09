@@ -51,7 +51,7 @@ class AICLITool:
                 try:
                     os.killpg(os.getpgid(process.pid), signal.SIGTERM)
                 except Exception as e:
-                    logger.error(f"Failed to kill process group: {e}")
+                    logger.error(f"Failed to kill process group on timeout: {e}")
 
                 # Try to cleanup, but don't wait forever
                 try:
@@ -59,6 +59,19 @@ class AICLITool:
                 except:
                     pass
                 return "", f"Timeout after {self.params.timeout} seconds", -1
+            except asyncio.CancelledError:
+                # Kill the whole process group if the task is cancelled
+                try:
+                    os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+                except Exception as e:
+                    logger.error(f"Failed to kill process group on cancellation: {e}")
+                
+                # Try to cleanup, but don't wait forever
+                try:
+                    await asyncio.wait_for(process.communicate(), timeout=5)
+                except:
+                    pass
+                raise
             except Exception as e:
                 logger.error(f"Error during process communication: {e}")
                 return "", str(e), -1

@@ -36,18 +36,20 @@ Run the writing loop command followed by the number of rounds (iterations) you w
 ```
 
 The bot will create a project folder and start the process:
-- **Writer Bot Phase**: Generates a complete LaTeX source set and compiles it into a PDF (`round_i.pdf`).
-- **Reviewer Bot Phase**: Critically evaluates the paper based on the criteria in `reviewing_goal.md` and generates a report (`review_i.md`).
+- **Writer Bot Phase**: Generates a complete LaTeX source set and compiles it into a PDF (`paper.pdf`).
+- **Reviewer Bot Phase**: Critically evaluates the paper based on the criteria in `reviewing_goal.md` and generates a report (`review.md`).
+
+You can start multiple paper writing tasks simultaneously. Each task will have its own unique `task_id`.
 
 ## Step 4: Monitor Progress
 
-Use the following command to check the current round and progress:
+Use the following command to check the current round and progress for all running tasks:
 
 ```bash
 /status
 ```
 
-The bot will send periodic updates about the completion of each round.
+The bot will display the current round and phase (e.g., Writing, Reviewing) for each paper writing task.
 
 ## Step 5: Stop or Cancel
 
@@ -57,7 +59,9 @@ If you want to terminate the loop early, use:
 /stop <task_id>
 ```
 
-Replace `<task_id>` with the ID provided by the `/status` command.
+Replace `<task_id>` with the numeric ID provided by the `/status` command.
+
+When a task is cancelled, the bot will immediately package all results obtained so far (source files, drafts, and reviews from completed rounds) into a `.zip` file and send it to you.
 
 ## Step 6: Download the Final Results
 

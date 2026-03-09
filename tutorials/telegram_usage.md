@@ -40,8 +40,9 @@ Open Telegram and search for your bot's username. Click "Start" or send `/start`
 - `/start`: Initialize the bot and show basic information.
 - `/projects`: List the directories available in the workspace.
 - `/create <project_name>`: Create a new project directory in the workspace.
-- `/status`: Show the status of currently running and queued tasks.
-- `/stop <task_id>`: Cancel a running or queued task. Use `/status` to find the `task_id`.
+- `/status`: Show the status of currently running (regular and paper writing) and queued tasks. For paper writing tasks, it shows the current round and phase.
+- `/stop <task_id>`: Cancel a running or queued task. Use `/status` to find the `task_id`. If a paper writing task is cancelled, the bot will package and send the partial results as a `.zip` file.
+- `/write_paper <rounds_n>`: Start a paper writing loop with `rounds_n` rounds (default is 3). Requires a `.zip` file containing `writing_goal.md` and `reviewing_goal.md` to be uploaded first.
 
 ## Step 4: Manage Your Workspace
 

@@ -41,14 +41,14 @@ class TelegramBot:
         self.application = ApplicationBuilder().token(self.params.token).build()
         self.project_queues: Dict[str, asyncio.Queue] = {}
         self.active_workers: Dict[str, asyncio.Task] = {}
-        self.running_tasks: Dict[int, Dict[str, Any]] = {}
-        self.tasks_by_id: Dict[int, Dict[str, Any]] = {}
+        self.running_tasks: Dict[int, Dict[str, Any]] = {}  # tid -> info
+        self.tasks_by_id: Dict[int, Dict[str, Any]] = {}    # tid -> task_info
         self.worker_lock = asyncio.Lock()
         self.task_id_counter = 1
         self.user_project_state: Dict[int, str] = {}
         self.paper_loop = PaperWritingLoop(self.ai_tool, self.params.workspace_dir)
         self.last_zip_paths: Dict[int, str] = {}
-        self.background_tasks: set[asyncio.Task] = set()
+        self.background_tasks: Dict[int, asyncio.Task] = {} # tid -> Task
 
         # Register handlers
         self._register_handlers()
@@ -175,9 +175,20 @@ class TelegramBot:
             if self.running_tasks:
                 status_msg += "🏃 **Running Tasks:**\n"
                 for tid, info in self.running_tasks.items():
-                    project_name = os.path.basename(info['task']['cwd']) or "Root"
-                    task_text = info['task']['text']
-                    task_preview = (task_text[:self.params.status_desc_length] + '...') if len(task_text) > self.params.status_desc_length else task_text
+                    task = info['task']
+                    if task['type'] == 'paper':
+                        project_name = "PaperLoop"
+                        task_preview = f"ID: {task['paper_id']}"
+                        paper_status = task.get('paper_status', {})
+                        if 'round' in paper_status:
+                             task_preview += f" (Round {paper_status['round']}/{paper_status['total_rounds']}, {paper_status.get('phase', 'N/A')})"
+                        else:
+                             task_preview += f" ({paper_status.get('phase', 'Initializing')})"
+                    else:
+                        project_name = os.path.basename(task['cwd']) or "Root"
+                        task_text = task['text']
+                        task_preview = (task_text[:self.params.status_desc_length] + '...') if len(task_text) > self.params.status_desc_length else task_text
+                    
                     elapsed = int(time.time() - info['start_time'])
                     status_msg += f"- `[{tid}]` `{project_name}`: {task_preview} ({elapsed}s)\n"
                 status_msg += "\n"
@@ -207,25 +218,26 @@ class TelegramBot:
             logger.error(f"Error in stop_tasks: {e}")
             await update.message.reply_text(f"❌ Error: {e}")
 
-    async def perform_stop_by_id(self, task_id, chat_id):
+    async def perform_stop_by_id(self, task_id: int, chat_id: int):
         async with self.worker_lock:
-            task = self.tasks_by_id.get(task_id)
-            if not task:
+            task_info = self.tasks_by_id.get(task_id)
+            if not task_info:
                 await self.application.bot.send_message(chat_id, f"❌ Task `{task_id}` does not exist.")
                 return
 
-            if task_id in self.running_tasks:
-                info = self.running_tasks[task_id]
-                info['stopped'] = True
-                pass
+            if task_info['status'] == 'queued':
+                task_info['status'] = 'cancelled'
+                await self.application.bot.send_message(chat_id, f"🛑 Task `{task_id}` marked as cancelled in queue.")
+                return
 
-            if task['status'] == 'queued':
-                 task['status'] = 'cancelled'
-                 await self.application.bot.send_message(chat_id, f"🛑 Task `{task_id}` marked as cancelled.")
-                 return
+            if task_id in self.background_tasks:
+                task = self.background_tasks[task_id]
+                task.cancel()
+                await self.application.bot.send_message(chat_id, f"🛑 Task `{task_id}` has been signaled to stop.")
+                return
 
-            status = task.get('status', 'unknown')
-            await self.application.bot.send_message(chat_id, f"ℹ️ Task `{task_id}` is not currently queued (Status: {status}).")
+            status = task_info.get('status', 'unknown')
+            await self.application.bot.send_message(chat_id, f"ℹ️ Task `{task_id}` is not currently cancellable (Status: {status}).")
 
     async def clean_all_papers(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
@@ -279,35 +291,77 @@ class TelegramBot:
                 return
 
         tid = await self.next_task_id()
-        task_id = f"paper_task_{tid}"
+        paper_id = f"paper_task_{tid}"
+
+        task_info = {
+            'id': tid,
+            'paper_id': paper_id,
+            'chat_id': chat_id,
+            'type': 'paper',
+            'status': 'running',
+            'paper_status': {}
+        }
+        
+        async with self.worker_lock:
+            self.tasks_by_id[tid] = task_info
+            self.running_tasks[tid] = {
+                'task': task_info,
+                'start_time': time.time()
+            }
 
         # We run this as a task in the background
-        # Keep a strong reference to the task until it's finished to avoid garbage collection
-        task = asyncio.create_task(self.run_paper_loop_task(chat_id, task_id, zip_path, rounds_n))
-        self.background_tasks.add(task)
-        task.add_done_callback(self.background_tasks.discard)
+        task = asyncio.create_task(self.run_paper_loop_task(tid, chat_id, paper_id, zip_path, rounds_n))
+        self.background_tasks[tid] = task
 
-        await update.message.reply_text(f"🚀 Started Paper Writing Loop (ID: {task_id}) for {rounds_n} rounds.")
+        await update.message.reply_text(f"🚀 Started Paper Writing Loop (ID: {tid}) for {rounds_n} rounds.")
 
-    async def run_paper_loop_task(self, chat_id, task_id, zip_path, rounds_n):
+    async def run_paper_loop_task(self, tid, chat_id, paper_id, zip_path, rounds_n):
         async def status_update(msg):
             await self.application.bot.send_message(chat_id, msg)
 
         try:
-            final_zip_path = await self.paper_loop.run(task_id, zip_path, rounds_n, status_update)
+            task_info = self.tasks_by_id[tid]
+            final_zip_path = await self.paper_loop.run(paper_id, zip_path, rounds_n, status_update, task_info['paper_status'])
 
             with open(final_zip_path, 'rb') as f:
-                await self.application.bot.send_document(chat_id, f, caption=f"🏁 Paper writing task {task_id} completed!")
+                await self.application.bot.send_document(chat_id, f, caption=f"🏁 Paper writing task {tid} ({paper_id}) completed!")
 
-            # Cleanup temp zip
-            if os.path.exists(zip_path):
-                os.remove(zip_path)
-            if chat_id in self.last_zip_paths:
-                del self.last_zip_paths[chat_id]
+            async with self.worker_lock:
+                task_info['status'] = 'completed'
 
+        except asyncio.CancelledError:
+            # PaperWritingLoop.run should have created a zip and raised this.
+            # We want to send the partial zip if available.
+            await self.application.bot.send_message(chat_id, f"🛑 Task {tid} ({paper_id}) cancelled. Sending partial results...")
+            
+            # The zip path should be predictable: tasks_dir + paper_id + _final.zip
+            final_zip_path = os.path.join(self.paper_loop.tasks_dir, f"{paper_id}_final.zip")
+            if os.path.exists(final_zip_path):
+                 with open(final_zip_path, 'rb') as f:
+                    await self.application.bot.send_document(chat_id, f, caption=f"🛑 Task {tid} ({paper_id}) partial results.")
+            
+            async with self.worker_lock:
+                self.tasks_by_id[tid]['status'] = 'cancelled'
         except Exception as e:
             logger.error(f"Error in run_paper_loop_task: {e}")
             await self.application.bot.send_message(chat_id, f"❌ Paper loop failed: {e}")
+            async with self.worker_lock:
+                self.tasks_by_id[tid]['status'] = 'failed'
+        finally:
+            async with self.worker_lock:
+                if tid in self.running_tasks:
+                    del self.running_tasks[tid]
+                if tid in self.background_tasks:
+                    del self.background_tasks[tid]
+
+            # Cleanup temp zip if it was the original one
+            if os.path.exists(zip_path) and zip_path.endswith(f"paper_input_{chat_id}.zip"):
+                try:
+                    os.remove(zip_path)
+                except:
+                    pass
+            if chat_id in self.last_zip_paths and self.last_zip_paths[chat_id] == zip_path:
+                del self.last_zip_paths[chat_id]
 
     async def handle_task(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = update.effective_chat.id
@@ -319,6 +373,7 @@ class TelegramBot:
             'chat_id': chat_id,
             'text': update.message.text,
             'cwd': current_dir,
+            'type': 'regular',
             'status': 'queued'
         }
 
@@ -333,16 +388,17 @@ class TelegramBot:
         await update.message.reply_text(f"📝 Task queued (ID: {tid}) for {os.path.basename(current_dir)}\n{q_size - 1} tasks ahead in this folder.")
 
     async def process_task(self, task):
+        tid = task['id']
         chat_id = task['chat_id']
         task_text = task['text']
         work_dir = task['cwd']
 
         if task.get('status') == 'cancelled':
-            logger.info(f"Skipping cancelled task {task['id']}")
+            logger.info(f"Skipping cancelled task {tid}")
             return
 
         try:
-            await self.application.bot.send_message(chat_id, f"⚙️ Executing...\nDirectory: {os.path.basename(work_dir)}")
+            await self.application.bot.send_message(chat_id, f"⚙️ Executing Task {tid}...\nDirectory: {os.path.basename(work_dir)}")
 
             agent_rules_path = os.path.join(self.params.workspace_dir, 'AGENT.md')
             if os.path.exists(agent_rules_path) and os.path.isfile(agent_rules_path):
@@ -356,25 +412,14 @@ class TelegramBot:
                     await self.application.bot.send_message(chat_id, f"⚠️ Warning: Found AGENT.md but failed to read it: {e}")
 
             async with self.worker_lock:
-                self.running_tasks[task['id']] = {
+                self.running_tasks[tid] = {
                     'task': task,
-                    'start_time': time.time(),
-                    'stopped': False
+                    'start_time': time.time()
                 }
 
             stdout, stderr, return_code = await self.ai_tool.call(task_text, work_dir)
 
-            async with self.worker_lock:
-                was_stopped = False
-                if task['id'] in self.running_tasks:
-                    was_stopped = self.running_tasks[task['id']].get('stopped', False)
-                    del self.running_tasks[task['id']]
-                task['status'] = 'completed' if not was_stopped else 'stopped'
-
-            if was_stopped:
-                return
-
-            reply = f"✅ Task Completed (ID: {task['id']})\n\n[Output]:\n{stdout}"
+            reply = f"✅ Task Completed (ID: {tid})\n\n[Output]:\n{stdout}"
             if stderr:
                 reply += f"\n\n[Error/Warning]:\n{stderr}"
             if return_code != 0 and not stderr:
@@ -384,24 +429,53 @@ class TelegramBot:
                 reply = reply[:4000] + "...\n[Output Truncated]"
 
             await self.application.bot.send_message(chat_id, reply)
+            async with self.worker_lock:
+                task['status'] = 'completed'
 
+        except asyncio.CancelledError:
+            logger.info(f"Task {tid} was cancelled.")
+            await self.application.bot.send_message(chat_id, f"🛑 Task {tid} was cancelled.")
+            async with self.worker_lock:
+                task['status'] = 'cancelled'
         except Exception as e:
-            logger.error(f"Worker exception: {e}")
+            logger.error(f"Worker exception in task {tid}: {e}")
             try:
-                await self.application.bot.send_message(chat_id, f"❌ Internal Worker Error: {e}")
+                await self.application.bot.send_message(chat_id, f"❌ Internal Worker Error for task {tid}: {e}")
             except:
                 pass
+            async with self.worker_lock:
+                task['status'] = 'failed'
+        finally:
+            async with self.worker_lock:
+                if tid in self.running_tasks:
+                    del self.running_tasks[tid]
 
     async def project_worker(self, project_path):
         queue = self.project_queues[project_path]
         while True:
             try:
                 # Wait for a task from the queue
-                # Use a timeout to stop the worker if idle
                 task = await asyncio.wait_for(queue.get(), timeout=300)
-                task['status'] = 'running'
-                await self.process_task(task)
-                queue.task_done()
+                tid = task['id']
+                
+                async with self.worker_lock:
+                    if task.get('status') == 'cancelled':
+                         queue.task_done()
+                         continue
+                    task['status'] = 'running'
+                    
+                    # Run process_task as a cancellable task
+                    proc_task = asyncio.create_task(self.process_task(task))
+                    self.background_tasks[tid] = proc_task
+                
+                try:
+                    await proc_task
+                finally:
+                    async with self.worker_lock:
+                        if tid in self.background_tasks:
+                            del self.background_tasks[tid]
+                    queue.task_done()
+
             except asyncio.TimeoutError:
                 async with self.worker_lock:
                     if project_path in self.active_workers:
