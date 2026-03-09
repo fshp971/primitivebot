@@ -21,7 +21,7 @@ PrimitiveBot is designed for asynchronous, concurrent execution of AI tasks with
 
 ### 1. TelegramBot Class
 The `TelegramBot` class encapsulates the Telegram interface and task management logic using `asyncio`. It is initialized with `TelegramBotParams` and an `AICLITool` instance.
-- **Bot Engine**: Uses `telebot.async_telebot.AsyncTeleBot` for non-blocking communication.
+- **Bot Engine**: Uses `python-telegram-bot` (v20+ asyncio version) for non-blocking communication.
 - **Command Handlers**: Asynchronous handlers for project selection, creation, and status monitoring.
 - **Whitelist**: Optional access control via `whitelist` configuration to restrict bot access to authorized user IDs.
 - **Message Receiver**: Any non-command text is treated as a task for the current project.

@@ -4,13 +4,13 @@ this is simple app for primitives to operate gemini-cli through telegram. It imp
 
 ## Key Features
 
-1.  **Per-Project Concurrency:** 
+1.  **Per-Project Concurrency:**
     -   Each project folder has its own independent task queue and worker thread.
     -   Tasks submitted to "Project A" and "Project B" run simultaneously without blocking each other.
-2.  **Sequential Execution:** 
+2.  **Sequential Execution:**
     -   Tasks within a single project (e.g., "Project A") are executed one by one in the order they were received.
     -   This prevents race conditions and conflicts when modifying files within the same project.
-3.  **Context Switching:** 
+3.  **Context Switching:**
     -   Users can seamlessly switch between projects using `/cd` or the menu.
     -   Switching context does not interrupt running tasks in other projects.
 4.  **Persistent Architecture:**
@@ -20,7 +20,7 @@ this is simple app for primitives to operate gemini-cli through telegram. It imp
 
 *   **`bot.py`**: The main application logic. It manages a dynamic set of `queue.Queue` objects and worker threads—one pair for each active project.
 *   **`Dockerfile`**: Defines the container environment, including Python 3.10, Node.js (for `gemini-cli`), and system dependencies.
-*   **`requirements.txt`**: Python dependencies (`pyTelegramBotAPI`, `python-dotenv`).
+*   **`requirements.txt`**: Python dependencies (`python-telegram-bot`, `python-dotenv`).
 
 ## Project Organization
 
@@ -72,7 +72,7 @@ Create a `.env` file on your host machine to store your secrets.
 # .env
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
 # Optional: defaults to /workspace inside the container
-WORKSPACE_DIR=/workspace 
+WORKSPACE_DIR=/workspace
 ```
 You can control your bot's behavior by placing two special files in the `home/` directory:
 

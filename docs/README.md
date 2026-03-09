@@ -16,7 +16,7 @@ PrimitiveBot is a Telegram Bot that acts as an interface for `gemini-cli`. It al
 PrimitiveBot enables developers to interact with their codebases through a Telegram interface. By bridging the gap between a chat platform and the `gemini-cli`, it allows for remote code editing, refactoring, and general AI assistance on any project hosted within its workspace.
 
 ## Design & Architecture
-The system is built using Python and is organized into a modular structure under `src/primitivebot`. It uses the `pyTelegramBotAPI` for Telegram communication and an agnostic AI CLI tool interface for executing tasks.
+The system is built using Python and is organized into a modular structure under `src/primitivebot`. It uses the `python-telegram-bot` (v20+ asyncio version) for Telegram communication and an agnostic AI CLI tool interface for executing tasks.
 
 ### Key Components:
 - **TelegramBot**: A class that encapsulates the Telegram interface, task dispatching, and worker task management using `asyncio`. It is initialized with configuration parameters and an AI tool calling class.
@@ -54,7 +54,7 @@ To run a task, simply select a project and send a message. The bot will:
 To reproduce the functionality of this repository, an AI coding tool should follow these steps:
 
 1. **Environment Setup**:
-   - Provide a Python environment with `pyTelegramBotAPI`, `python-dotenv`, and `PyYAML`.
+   - Provide a Python environment with `python-telegram-bot`, `python-dotenv`, and `PyYAML`.
    - Ensure `gemini-cli` is installed and accessible via the `gemini` command.
    - Set up a workspace directory for project folders.
 

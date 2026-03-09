@@ -7,14 +7,14 @@ import zipfile
 import shutil
 import io
 
-# Mock telebot
-mock_telebot = MagicMock()
-mock_telebot.async_telebot = MagicMock()
-mock_telebot.types = MagicMock()
+# Mock telegram
+mock_telegram = MagicMock()
+mock_telegram_ext = MagicMock()
+mock_telegram_constants = MagicMock()
 
-sys.modules['telebot'] = mock_telebot
-sys.modules['telebot.async_telebot'] = mock_telebot.async_telebot
-sys.modules['telebot.types'] = mock_telebot.types
+sys.modules['telegram'] = mock_telegram
+sys.modules['telegram.ext'] = mock_telegram_ext
+sys.modules['telegram.constants'] = mock_telegram_constants
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
@@ -35,17 +35,18 @@ class TestPaperWritingLoop(unittest.IsolatedAsyncioTestCase):
         self.ai_tool = MagicMock(spec=AICLITool)
         self.ai_tool.call = AsyncMock()
 
-        self.mock_async_bot = MagicMock()
-        self.mock_async_bot.reply_to = AsyncMock()
-        self.mock_async_bot.send_message = AsyncMock()
-        self.mock_async_bot.get_file = AsyncMock()
-        self.mock_async_bot.download_file = AsyncMock()
-        self.mock_async_bot.send_document = AsyncMock()
+        self.mock_app = MagicMock()
+        self.mock_app.bot = AsyncMock()
+        self.mock_app.bot.send_message = AsyncMock()
+        self.mock_app.bot.send_document = AsyncMock()
 
-        mock_telebot.async_telebot.AsyncTeleBot.return_value = self.mock_async_bot
+        mock_builder = MagicMock()
+        mock_builder.token.return_value = mock_builder
+        mock_builder.build.return_value = self.mock_app
+        mock_telegram_ext.ApplicationBuilder.return_value = mock_builder
 
         self.telegram_bot = TelegramBot(self.params, self.ai_tool)
-        self.telegram_bot.bot = self.mock_async_bot
+        self.telegram_bot.application = self.mock_app
 
         # Ensure workspace exists
         if not os.path.exists(self.params.workspace_dir):
@@ -67,7 +68,7 @@ class TestPaperWritingLoop(unittest.IsolatedAsyncioTestCase):
         # Mock file system and external calls
         mock_exists.return_value = True
         mock_listdir.return_value = ['writing_goal.md', 'reviewing_goal.md', 'paper.pdf', 'review.md']
-        
+
         # We need to mock the context manager for ZipFile
         mock_zip_instance = MagicMock()
         mock_zip.return_value.__enter__.return_value = mock_zip_instance
@@ -76,64 +77,70 @@ class TestPaperWritingLoop(unittest.IsolatedAsyncioTestCase):
         self.ai_tool.call.return_value = ("Output", "", 0)
 
         status_callback = AsyncMock()
-        
+
         paper_loop = PaperWritingLoop(self.ai_tool, self.params.workspace_dir)
-        
+
         # Create a dummy zip file path
         zip_path = os.path.join(self.params.workspace_dir, 'input.zip')
-        
+
         # Run 1 round
         final_zip = await paper_loop.run("task1", zip_path, 1, status_callback)
-        
+
         self.assertIn("task1_final.zip", final_zip)
         self.assertEqual(self.ai_tool.call.call_count, 2) # 1 Writer + 1 Reviewer
         status_callback.assert_called()
 
     async def test_handle_document_zip(self):
-        message = MagicMock()
-        message.chat.id = 123
-        message.document.file_name = "test.zip"
-        message.document.file_id = "file123"
+        update = MagicMock()
+        update.effective_chat.id = 123
+        update.message = AsyncMock()
+        update.message.document.file_name = "test.zip"
+        update.message.document.file_id = "file123"
 
-        file_info = MagicMock()
-        file_info.file_path = "path/to/file"
-        self.mock_async_bot.get_file.return_value = file_info
-        self.mock_async_bot.download_file.return_value = b"zip_content"
+        context = MagicMock()
+        context.bot.get_file = AsyncMock()
 
-        await self.telegram_bot.handle_document(message)
+        mock_file = AsyncMock()
+        context.bot.get_file.return_value = mock_file
 
-        self.mock_async_bot.download_file.assert_called_with("path/to/file")
+        await self.telegram_bot.handle_document(update, context)
+
+        mock_file.download_to_drive.assert_called()
         self.assertIn(123, self.telegram_bot.last_zip_paths)
-        self.mock_async_bot.reply_to.assert_called_with(message, unittest.mock.ANY)
-        self.assertIn("Zip file received", self.mock_async_bot.reply_to.call_args[0][1])
+        update.message.reply_text.assert_called()
+        self.assertIn("Zip file received", update.message.reply_text.call_args[0][0])
 
     async def test_write_paper_command(self):
         self.telegram_bot.last_zip_paths[123] = "/tmp/test_workspace/input.zip"
-        
+
         # Mock file exists
         with patch('os.path.exists', return_value=True):
-            message = MagicMock()
-            message.chat.id = 123
-            message.text = "/write_paper 2"
+            update = MagicMock()
+            update.effective_chat.id = 123
+            update.message = AsyncMock()
+            context = MagicMock()
+            context.args = ["2"]
 
             with patch('asyncio.create_task') as mock_create_task:
-                await self.telegram_bot.write_paper(message)
-                
+                await self.telegram_bot.write_paper(update, context)
+
                 mock_create_task.assert_called()
-                self.mock_async_bot.reply_to.assert_called_with(message, unittest.mock.ANY)
-                self.assertIn("Started Paper Writing Loop", self.mock_async_bot.reply_to.call_args[0][1])
+                update.message.reply_text.assert_called()
+                self.assertIn("Started Paper Writing Loop", update.message.reply_text.call_args[0][0])
 
     @patch('shutil.rmtree')
     @patch('os.path.exists')
     async def test_clean_task(self, mock_exists, mock_rmtree):
         mock_exists.return_value = True
-        message = MagicMock()
-        message.text = "/clean task1"
-        
-        await self.telegram_bot.clean_task(message)
-        
+        update = MagicMock()
+        update.message = AsyncMock()
+        context = MagicMock()
+        context.args = ["task1"]
+
+        await self.telegram_bot.clean_task(update, context)
+
         mock_rmtree.assert_called()
-        self.mock_async_bot.reply_to.assert_called_with(message, "✅ Cleaned task task1")
+        update.message.reply_text.assert_called_with("✅ Cleaned task task1")
 
 if __name__ == '__main__':
     unittest.main()

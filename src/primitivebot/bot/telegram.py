@@ -5,8 +5,16 @@ import logging
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
-from telebot.async_telebot import AsyncTeleBot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    filters,
+)
+from telegram.constants import ParseMode
 from primitivebot.ai.cli import AICLITool
 from primitivebot.bot.paper_loop import PaperWritingLoop
 
@@ -23,14 +31,14 @@ class TelegramBotParams:
     # any other IM specific parameters
 
 class TelegramBot:
-    """Refactored TelegramBot class using asyncio."""
+    """Refactored TelegramBot class using python-telegram-bot asyncio version."""
 
     def __init__(self, params: TelegramBotParams, ai_tool: AICLITool):
         self.params = params
         self.ai_tool = ai_tool
 
         # Internal state
-        self.bot = AsyncTeleBot(self.params.token)
+        self.application = ApplicationBuilder().token(self.params.token).build()
         self.project_queues: Dict[str, asyncio.Queue] = {}
         self.active_workers: Dict[str, asyncio.Task] = {}
         self.running_tasks: Dict[int, Dict[str, Any]] = {}
@@ -50,55 +58,36 @@ class TelegramBot:
         return user_id in self.params.whitelist
 
     def _register_handlers(self):
-        @self.bot.message_handler(func=lambda message: not self._is_allowed(message.from_user.id))
-        async def unauthorized_message_handler(message):
-            logger.warning(f"Unauthorized access attempt by user {message.from_user.id} ({message.from_user.username})")
-            await self.bot.reply_to(message, "🚫 You are not authorized to use this bot.")
+        # Whitelist filter
+        async def check_whitelist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+            user = update.effective_user
+            if not user or not self._is_allowed(user.id):
+                if update.message:
+                    logger.warning(f"Unauthorized access attempt by user {user.id} ({user.username if user else 'N/A'})")
+                    await update.message.reply_text("🚫 You are not authorized to use this bot.")
+                elif update.callback_query:
+                    logger.warning(f"Unauthorized callback attempt by user {user.id} ({user.username if user else 'N/A'})")
+                    await update.callback_query.answer("🚫 Unauthorized", show_alert=True)
+                return False
+            return True
 
-        @self.bot.callback_query_handler(func=lambda call: not self._is_allowed(call.from_user.id))
-        async def unauthorized_callback_handler(call):
-            logger.warning(f"Unauthorized callback attempt by user {call.from_user.id} ({call.from_user.username})")
-            await self.bot.answer_callback_query(call.id, "🚫 Unauthorized", show_alert=True)
+        # Use a wrapper for authorized handlers
+        def authorized_handler(handler_func):
+            async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE):
+                if await check_whitelist(update, context):
+                    return await handler_func(update, context)
+            return wrapped
 
-        @self.bot.message_handler(commands=['cd', 'projects', 'start'])
-        async def list_projects_handler(message):
-            await self.list_projects(message)
-
-        @self.bot.callback_query_handler(func=lambda call: call.data.startswith('proj_'))
-        async def handle_project_selection_handler(call):
-            await self.handle_project_selection(call)
-
-        @self.bot.message_handler(commands=['create'])
-        async def create_project_handler(message):
-            await self.create_project(message)
-
-        @self.bot.message_handler(commands=['status'])
-        async def show_status_handler(message):
-            await self.show_status(message)
-
-        @self.bot.message_handler(commands=['stop', 'cancel'])
-        async def stop_tasks_handler(message):
-            await self.stop_tasks(message)
-
-        @self.bot.message_handler(commands=['clean'])
-        async def clean_task_handler(message):
-            await self.clean_task(message)
-
-        @self.bot.message_handler(commands=['clean_all_papers'])
-        async def clean_all_papers_handler(message):
-            await self.clean_all_papers(message)
-
-        @self.bot.message_handler(commands=['write_paper'])
-        async def write_paper_handler(message):
-            await self.write_paper(message)
-
-        @self.bot.message_handler(content_types=['document'])
-        async def handle_document_handler(message):
-            await self.handle_document(message)
-
-        @self.bot.message_handler(func=lambda message: not message.text.startswith('/'))
-        async def handle_task_handler(message):
-            await self.handle_task(message)
+        self.application.add_handler(CommandHandler(["cd", "projects", "start"], authorized_handler(self.list_projects)))
+        self.application.add_handler(CallbackQueryHandler(authorized_handler(self.handle_project_selection), pattern="^proj_"))
+        self.application.add_handler(CommandHandler("create", authorized_handler(self.create_project)))
+        self.application.add_handler(CommandHandler("status", authorized_handler(self.show_status)))
+        self.application.add_handler(CommandHandler(["stop", "cancel"], authorized_handler(self.stop_tasks)))
+        self.application.add_handler(CommandHandler("clean", authorized_handler(self.clean_task)))
+        self.application.add_handler(CommandHandler("clean_all_papers", authorized_handler(self.clean_all_papers)))
+        self.application.add_handler(CommandHandler("write_paper", authorized_handler(self.write_paper)))
+        self.application.add_handler(MessageHandler(filters.Document.ZIP, authorized_handler(self.handle_document)))
+        self.application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), authorized_handler(self.handle_task)))
 
     async def next_task_id(self) -> int:
         async with self.worker_lock:
@@ -124,22 +113,24 @@ class TelegramBot:
 
     # --- Handlers implementation ---
 
-    async def list_projects(self, message):
+    async def list_projects(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         dirs = self.get_project_dirs()
         if not dirs:
-            await self.bot.reply_to(message, "Workspace is empty. Please create project folders in the mounted host directory.")
+            await update.message.reply_text("Workspace is empty. Please create project folders in the mounted host directory.")
             return
 
-        markup = InlineKeyboardMarkup()
+        keyboard = []
         for d in dirs:
-            markup.add(InlineKeyboardButton(d, callback_data=f"proj_{d}"))
-        markup.add(InlineKeyboardButton("🏠 Root Directory", callback_data="proj_ROOT"))
+            keyboard.append([InlineKeyboardButton(d, callback_data=f"proj_{d}")])
+        keyboard.append([InlineKeyboardButton("🏠 Root Directory", callback_data="proj_ROOT")])
 
-        await self.bot.send_message(message.chat.id, "📁 Select a project directory:", reply_markup=markup)
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text("📁 Select a project directory:", reply_markup=reply_markup)
 
-    async def handle_project_selection(self, call):
-        project_name = call.data.replace('proj_', '')
-        chat_id = call.message.chat.id
+    async def handle_project_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        project_name = query.data.replace('proj_', '')
+        chat_id = query.message.chat_id
 
         if project_name == "ROOT":
             self.user_project_state[chat_id] = self.params.workspace_dir
@@ -148,38 +139,36 @@ class TelegramBot:
             self.user_project_state[chat_id] = os.path.join(self.params.workspace_dir, project_name)
             display_name = project_name
 
-        await self.bot.answer_callback_query(call.id, "Switched successfully")
-        await self.bot.edit_message_text(f"✅ Current working directory switched to: {display_name}\nSubsequent tasks will execute in this folder.",
-                              chat_id=chat_id, message_id=call.message.message_id)
+        await query.answer("Switched successfully")
+        await query.edit_message_text(f"✅ Current working directory switched to: {display_name}\nSubsequent tasks will execute in this folder.")
 
-    async def create_project(self, message):
+    async def create_project(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
-            parts = message.text.split()
-            if len(parts) < 2:
-                await self.bot.reply_to(message, "Usage: /create <project_name>")
+            if not context.args:
+                await update.message.reply_text("Usage: /create <project_name>")
                 return
 
-            project_name = parts[1]
+            project_name = context.args[0]
             if not all(c.isalnum() or c in ('_', '-') for c in project_name):
-                 await self.bot.reply_to(message, "Invalid project name. Use alphanumeric characters, underscores, or hyphens.")
+                 await update.message.reply_text("Invalid project name. Use alphanumeric characters, underscores, or hyphens.")
                  return
 
             project_path = os.path.join(self.params.workspace_dir, project_name)
             if os.path.exists(project_path):
-                await self.bot.reply_to(message, f"⚠️ Project '{project_name}' already exists.")
+                await update.message.reply_text(f"⚠️ Project '{project_name}' already exists.")
                 return
 
             os.makedirs(project_path)
-            await self.bot.reply_to(message, f"✅ Project '{project_name}' created successfully.")
+            await update.message.reply_text(f"✅ Project '{project_name}' created successfully.")
         except Exception as e:
             logger.error(f"Error creating project: {e}")
-            await self.bot.reply_to(message, f"❌ Failed to create project: {e}")
+            await update.message.reply_text(f"❌ Failed to create project: {e}")
 
-    async def show_status(self, message):
+    async def show_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         async with self.worker_lock:
             active_projects = [p for p, q in self.project_queues.items() if not q.empty()]
             if not self.running_tasks and not active_projects:
-                await self.bot.reply_to(message, "📭 No tasks running or queued.")
+                await update.message.reply_text("📭 No tasks running or queued.")
                 return
 
             status_msg = "📊 **System Status**\n\n"
@@ -201,74 +190,62 @@ class TelegramBot:
                         has_queued = True
                     project_name = os.path.basename(path) or "Root"
                     status_msg += f"📂 `{project_name}`:\n"
-                    # asyncio.Queue is not directly iterable in a safe way to show all items
-                    # but we can look at its internal _queue if we really want to, or keep track of it
-                    # Let's use a simpler approach for now.
                     status_msg += f"  - (Queue size: {q.qsize()})\n"
 
-            await self.bot.send_message(message.chat.id, status_msg, parse_mode='Markdown')
+            await update.message.reply_text(status_msg, parse_mode=ParseMode.MARKDOWN)
 
-    async def stop_tasks(self, message):
+    async def stop_tasks(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
-            parts = message.text.split()
-            if len(parts) < 2:
-                await self.bot.reply_to(message, "Usage: /stop {task_id}\nUse /status to see the task_id.")
+            if not context.args:
+                await update.message.reply_text("Usage: /stop {task_id}\nUse /status to see the task_id.")
                 return
-            task_id = int(parts[1])
-            await self.perform_stop_by_id(task_id, message.chat.id)
+            task_id = int(context.args[0])
+            await self.perform_stop_by_id(task_id, update.effective_chat.id)
         except ValueError:
-            await self.bot.reply_to(message, "Invalid task ID. Please provide a numeric task_id.")
+            await update.message.reply_text("Invalid task ID. Please provide a numeric task_id.")
         except Exception as e:
             logger.error(f"Error in stop_tasks: {e}")
-            await self.bot.reply_to(message, f"❌ Error: {e}")
+            await update.message.reply_text(f"❌ Error: {e}")
 
     async def perform_stop_by_id(self, task_id, chat_id):
         async with self.worker_lock:
             task = self.tasks_by_id.get(task_id)
             if not task:
-                await self.bot.send_message(chat_id, f"❌ Task `{task_id}` does not exist.")
+                await self.application.bot.send_message(chat_id, f"❌ Task `{task_id}` does not exist.")
                 return
 
             if task_id in self.running_tasks:
                 info = self.running_tasks[task_id]
                 info['stopped'] = True
-                # In AICLITool.call, we don't have direct access to the process here.
-                # However, the worker can handle it if we signal it.
-                # But since it's asyncio, we'd need to cancel the task.
-                # Stopping individual tasks in an async queue/worker setup is a bit more complex.
-                # For now, let's just mark it as stopped so the worker knows.
                 pass
 
-            # Removing from asyncio.Queue is not straightforward.
-            # Usually we mark it as cancelled and the worker skips it.
             if task['status'] == 'queued':
                  task['status'] = 'cancelled'
-                 await self.bot.send_message(chat_id, f"🛑 Task `{task_id}` marked as cancelled.")
+                 await self.application.bot.send_message(chat_id, f"🛑 Task `{task_id}` marked as cancelled.")
                  return
 
             status = task.get('status', 'unknown')
-            await self.bot.send_message(chat_id, f"ℹ️ Task `{task_id}` is not currently queued (Status: {status}).")
+            await self.application.bot.send_message(chat_id, f"ℹ️ Task `{task_id}` is not currently queued (Status: {status}).")
 
-    async def clean_task(self, message):
+    async def clean_task(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
-            parts = message.text.split()
-            if len(parts) < 2:
-                await self.bot.reply_to(message, "Usage: /clean <task_id>")
+            if not context.args:
+                await update.message.reply_text("Usage: /clean <task_id>")
                 return
 
-            task_id = parts[1]
+            task_id = context.args[0]
             project_dir = os.path.join(self.paper_loop.tasks_dir, task_id)
             if os.path.exists(project_dir):
                 import shutil
                 shutil.rmtree(project_dir)
-                await self.bot.reply_to(message, f"✅ Cleaned task {task_id}")
+                await update.message.reply_text(f"✅ Cleaned task {task_id}")
             else:
-                await self.bot.reply_to(message, f"❌ Task {task_id} not found.")
+                await update.message.reply_text(f"❌ Task {task_id} not found.")
         except Exception as e:
             logger.error(f"Error in clean_task: {e}")
-            await self.bot.reply_to(message, f"❌ Failed to clean task: {e}")
+            await update.message.reply_text(f"❌ Failed to clean task: {e}")
 
-    async def clean_all_papers(self, message):
+    async def clean_all_papers(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             import shutil
             if os.path.exists(self.paper_loop.tasks_dir):
@@ -278,48 +255,45 @@ class TelegramBot:
                         shutil.rmtree(item_path)
                     else:
                         os.remove(item_path)
-                await self.bot.reply_to(message, "✅ Cleaned all paper tasks.")
+                await update.message.reply_text("✅ Cleaned all paper tasks.")
             else:
-                await self.bot.reply_to(message, "📁 No paper tasks directory found.")
+                await update.message.reply_text("📁 No paper tasks directory found.")
         except Exception as e:
             logger.error(f"Error in clean_all_papers: {e}")
-            await self.bot.reply_to(message, f"❌ Failed to clean all paper tasks: {e}")
+            await update.message.reply_text(f"❌ Failed to clean all paper tasks: {e}")
 
-    async def handle_document(self, message):
-        chat_id = message.chat.id
-        if not message.document.file_name.endswith('.zip'):
-            await self.bot.reply_to(message, "⚠️ Please upload a .zip file for the paper writing task.")
+    async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        chat_id = update.effective_chat.id
+        doc = update.message.document
+        if not doc.file_name.endswith('.zip'):
+            await update.message.reply_text("⚠️ Please upload a .zip file for the paper writing task.")
             return
 
         try:
-            file_info = await self.bot.get_file(message.document.file_id)
-            downloaded_file = await self.bot.download_file(file_info.file_path)
+            file = await context.bot.get_file(doc.file_id)
 
             temp_zip_path = os.path.join(self.params.workspace_dir, f"paper_input_{chat_id}.zip")
-            with open(temp_zip_path, 'wb') as new_file:
-                new_file.write(downloaded_file)
+            await file.download_to_drive(temp_zip_path)
 
             self.last_zip_paths[chat_id] = temp_zip_path
-            await self.bot.reply_to(message, "✅ Zip file received. Use `/write_paper <rounds_n>` to start the loop.")
+            await update.message.reply_text("✅ Zip file received. Use `/write_paper <rounds_n>` to start the loop.")
         except Exception as e:
             logger.error(f"Error handling document: {e}")
-            await self.bot.reply_to(message, f"❌ Failed to receive file: {e}")
+            await update.message.reply_text(f"❌ Failed to receive file: {e}")
 
-    async def write_paper(self, message):
-        chat_id = message.chat.id
+    async def write_paper(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        chat_id = update.effective_chat.id
         zip_path = self.last_zip_paths.get(chat_id)
         if not zip_path or not os.path.exists(zip_path):
-            await self.bot.reply_to(message, "⚠️ No zip file found. Please upload a .zip file first.")
+            await update.message.reply_text("⚠️ No zip file found. Please upload a .zip file first.")
             return
 
-        parts = message.text.split()
-        if len(parts) < 2:
-            rounds_n = 3 # Default
-        else:
+        rounds_n = 3 # Default
+        if context.args:
             try:
-                rounds_n = int(parts[1])
+                rounds_n = int(context.args[0])
             except ValueError:
-                await self.bot.reply_to(message, "Usage: /write_paper <rounds_n>")
+                await update.message.reply_text("Usage: /write_paper <rounds_n>")
                 return
 
         tid = await self.next_task_id()
@@ -327,17 +301,17 @@ class TelegramBot:
 
         # We run this as a task in the background
         asyncio.create_task(self.run_paper_loop_task(chat_id, task_id, zip_path, rounds_n))
-        await self.bot.reply_to(message, f"🚀 Started Paper Writing Loop (ID: {task_id}) for {rounds_n} rounds.")
+        await update.message.reply_text(f"🚀 Started Paper Writing Loop (ID: {task_id}) for {rounds_n} rounds.")
 
     async def run_paper_loop_task(self, chat_id, task_id, zip_path, rounds_n):
         async def status_update(msg):
-            await self.bot.send_message(chat_id, msg)
+            await self.application.bot.send_message(chat_id, msg)
 
         try:
             final_zip_path = await self.paper_loop.run(task_id, zip_path, rounds_n, status_update)
 
             with open(final_zip_path, 'rb') as f:
-                await self.bot.send_document(chat_id, f, caption=f"🏁 Paper writing task {task_id} completed!")
+                await self.application.bot.send_document(chat_id, f, caption=f"🏁 Paper writing task {task_id} completed!")
 
             # Cleanup temp zip
             if os.path.exists(zip_path):
@@ -347,17 +321,17 @@ class TelegramBot:
 
         except Exception as e:
             logger.error(f"Error in run_paper_loop_task: {e}")
-            await self.bot.send_message(chat_id, f"❌ Paper loop failed: {e}")
+            await self.application.bot.send_message(chat_id, f"❌ Paper loop failed: {e}")
 
-    async def handle_task(self, message):
-        chat_id = message.chat.id
+    async def handle_task(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        chat_id = update.effective_chat.id
         current_dir = self.user_project_state.get(chat_id, self.params.workspace_dir)
 
         tid = await self.next_task_id()
         task = {
             'id': tid,
             'chat_id': chat_id,
-            'text': message.text,
+            'text': update.message.text,
             'cwd': current_dir,
             'status': 'queued'
         }
@@ -370,7 +344,7 @@ class TelegramBot:
             q_size = self.project_queues[current_dir].qsize()
 
         await self.ensure_worker_running(current_dir)
-        await self.bot.reply_to(message, f"📝 Task queued (ID: {tid}) for {os.path.basename(current_dir)}\n{q_size - 1} tasks ahead in this folder.")
+        await update.message.reply_text(f"📝 Task queued (ID: {tid}) for {os.path.basename(current_dir)}\n{q_size - 1} tasks ahead in this folder.")
 
     async def process_task(self, task):
         chat_id = task['chat_id']
@@ -382,7 +356,7 @@ class TelegramBot:
             return
 
         try:
-            await self.bot.send_message(chat_id, f"⚙️ Executing...\nDirectory: {os.path.basename(work_dir)}")
+            await self.application.bot.send_message(chat_id, f"⚙️ Executing...\nDirectory: {os.path.basename(work_dir)}")
 
             agent_rules_path = os.path.join(self.params.workspace_dir, 'AGENT.md')
             if os.path.exists(agent_rules_path) and os.path.isfile(agent_rules_path):
@@ -393,7 +367,7 @@ class TelegramBot:
                     logger.info(f"Loaded AGENT.md for task in {work_dir}")
                 except Exception as e:
                     logger.error(f"Failed to read AGENT.md: {e}")
-                    await self.bot.send_message(chat_id, f"⚠️ Warning: Found AGENT.md but failed to read it: {e}")
+                    await self.application.bot.send_message(chat_id, f"⚠️ Warning: Found AGENT.md but failed to read it: {e}")
 
             async with self.worker_lock:
                 self.running_tasks[task['id']] = {
@@ -423,12 +397,12 @@ class TelegramBot:
             if len(reply) > 4000:
                 reply = reply[:4000] + "...\n[Output Truncated]"
 
-            await self.bot.send_message(chat_id, reply)
+            await self.application.bot.send_message(chat_id, reply)
 
         except Exception as e:
             logger.error(f"Worker exception: {e}")
             try:
-                await self.bot.send_message(chat_id, f"❌ Internal Worker Error: {e}")
+                await self.application.bot.send_message(chat_id, f"❌ Internal Worker Error: {e}")
             except:
                 pass
 
@@ -456,7 +430,6 @@ class TelegramBot:
         init_file = os.path.join(self.params.workspace_dir, 'INIT.md')
         if os.path.exists(init_file):
             logger.info(f"Initializing bot with {init_file}...")
-            # We can use the AI tool to initialize as well
             stdout, stderr, return_code = await self.ai_tool.call(f"Initialize according to @{init_file}", self.params.workspace_dir)
             if return_code == 0:
                 logger.info("Bot initialization successful.")
@@ -473,4 +446,25 @@ class TelegramBot:
         logger.info("🤖 Bot Daemon Starting...")
         await self.initialize_bot()
         logger.info("🤖 Bot Daemon Started...")
-        await self.bot.polling(non_stop=True)
+        async with self.application:
+            await self.application.initialize()
+            await self.application.start()
+            await self.application.updater.start_polling()
+
+            # Keep the loop running until signaled
+            stop_event = asyncio.Event()
+
+            # Simple way to handle signals in this context
+            loop = asyncio.get_running_loop()
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                try:
+                    loop.add_signal_handler(sig, stop_event.set)
+                except NotImplementedError:
+                    # Signal handlers not supported on some platforms (like Windows)
+                    pass
+
+            await stop_event.wait()
+
+            await self.application.updater.stop()
+            await self.application.stop()
+            await self.application.shutdown()
