@@ -128,19 +128,5 @@ class TestPaperWritingLoop(unittest.IsolatedAsyncioTestCase):
                 update.message.reply_text.assert_called()
                 self.assertIn("Started Paper Writing Loop", update.message.reply_text.call_args[0][0])
 
-    @patch('shutil.rmtree')
-    @patch('os.path.exists')
-    async def test_clean_task(self, mock_exists, mock_rmtree):
-        mock_exists.return_value = True
-        update = MagicMock()
-        update.message = AsyncMock()
-        context = MagicMock()
-        context.args = ["task1"]
-
-        await self.telegram_bot.clean_task(update, context)
-
-        mock_rmtree.assert_called()
-        update.message.reply_text.assert_called_with("✅ Cleaned task task1")
-
 if __name__ == '__main__':
     unittest.main()

@@ -83,7 +83,6 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("create", authorized_handler(self.create_project)))
         self.application.add_handler(CommandHandler("status", authorized_handler(self.show_status)))
         self.application.add_handler(CommandHandler(["stop", "cancel"], authorized_handler(self.stop_tasks)))
-        self.application.add_handler(CommandHandler("clean", authorized_handler(self.clean_task)))
         self.application.add_handler(CommandHandler("clean_all_papers", authorized_handler(self.clean_all_papers)))
         self.application.add_handler(CommandHandler("write_paper", authorized_handler(self.write_paper)))
         self.application.add_handler(MessageHandler(filters.Document.ZIP, authorized_handler(self.handle_document)))
@@ -226,24 +225,6 @@ class TelegramBot:
 
             status = task.get('status', 'unknown')
             await self.application.bot.send_message(chat_id, f"ℹ️ Task `{task_id}` is not currently queued (Status: {status}).")
-
-    async def clean_task(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            if not context.args:
-                await update.message.reply_text("Usage: /clean <task_id>")
-                return
-
-            task_id = context.args[0]
-            project_dir = os.path.join(self.paper_loop.tasks_dir, task_id)
-            if os.path.exists(project_dir):
-                import shutil
-                shutil.rmtree(project_dir)
-                await update.message.reply_text(f"✅ Cleaned task {task_id}")
-            else:
-                await update.message.reply_text(f"❌ Task {task_id} not found.")
-        except Exception as e:
-            logger.error(f"Error in clean_task: {e}")
-            await update.message.reply_text(f"❌ Failed to clean task: {e}")
 
     async def clean_all_papers(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
