@@ -48,6 +48,7 @@ class TelegramBot:
         self.user_project_state: Dict[int, str] = {}
         self.paper_loop = PaperWritingLoop(self.ai_tool, self.params.workspace_dir)
         self.last_zip_paths: Dict[int, str] = {}
+        self.background_tasks: set[asyncio.Task] = set()
 
         # Register handlers
         self._register_handlers()
@@ -281,7 +282,11 @@ class TelegramBot:
         task_id = f"paper_task_{tid}"
 
         # We run this as a task in the background
-        asyncio.create_task(self.run_paper_loop_task(chat_id, task_id, zip_path, rounds_n))
+        # Keep a strong reference to the task until it's finished to avoid garbage collection
+        task = asyncio.create_task(self.run_paper_loop_task(chat_id, task_id, zip_path, rounds_n))
+        self.background_tasks.add(task)
+        task.add_done_callback(self.background_tasks.discard)
+
         await update.message.reply_text(f"🚀 Started Paper Writing Loop (ID: {task_id}) for {rounds_n} rounds.")
 
     async def run_paper_loop_task(self, chat_id, task_id, zip_path, rounds_n):
